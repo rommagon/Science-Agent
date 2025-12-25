@@ -122,12 +122,26 @@ def main() -> None:
     # Phase 3: Detect changes
     logger.info("Phase 3: Detecting changes")
     snapshot_dir = str(outdir / "snapshots")
-    changes = detect_changes(publications, snapshot_dir)
+    changes = detect_changes(publications, snapshot_dir, run_id)
     logger.info(
-        "Changes detected - New: %d, Updated: %d",
-        len(changes["new"]),
-        len(changes["updated"]),
+        "Changes detected - New: %d, Unchanged: %d",
+        changes["count_new"],
+        changes["count_total"] - changes["count_new"],
     )
+
+    # Save changes output with status
+    if publications:
+        changes_output_path = outdir / "raw" / f"{run_id}_changes.json"
+        changes_output = {
+            "run_id": run_id,
+            "timestamp": datetime.now().isoformat(),
+            "count_new": changes["count_new"],
+            "count_total": changes["count_total"],
+            "publications": changes["all_with_status"],
+        }
+        with open(changes_output_path, "w") as f:
+            json.dump(changes_output, f, indent=2)
+        logger.info("Saved changes output to %s", changes_output_path)
 
     # Phase 4: Generate report
     logger.info("Phase 4: Generating report")
@@ -137,9 +151,9 @@ def main() -> None:
     print("\n" + "=" * 70)
     print("Run Summary")
     print("=" * 70)
-    print(f"Publications fetched:    {len(publications)}")
-    print(f"New publications:        {len(changes['new'])}")
-    print(f"Updated publications:    {len(changes['updated'])}")
+    print(f"Publications fetched:    {changes['count_total']}")
+    print(f"New publications:        {changes['count_new']}")
+    print(f"Unchanged publications:  {changes['count_total'] - changes['count_new']}")
     print("=" * 70 + "\n")
 
     logger.info("Run completed successfully")
