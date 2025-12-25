@@ -2,6 +2,7 @@
 data/raw/*.json
 data/summaries/*.json
 data/snapshots/*.json
+data/output/*.md
 
 # Python
 __pycache__/

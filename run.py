@@ -145,7 +145,7 @@ def main() -> None:
 
     # Phase 4: Generate report
     logger.info("Phase 4: Generating report")
-    generate_report(publications, changes, str(outdir), run_id)
+    generate_report(str(outdir), run_id)
 
     # Summary
     print("\n" + "=" * 70)
