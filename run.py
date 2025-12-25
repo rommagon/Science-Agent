@@ -115,12 +115,8 @@ def main() -> None:
             json.dump(publications_data, f, indent=2)
         logger.info("Saved raw publications to %s", raw_output_path)
 
-    # Phase 2: Summarize publications
-    logger.info("Phase 2: Summarizing publications")
-    publications = summarize_publications(publications)
-
-    # Phase 3: Detect changes
-    logger.info("Phase 3: Detecting changes")
+    # Phase 2: Detect changes
+    logger.info("Phase 2: Detecting changes")
     snapshot_dir = str(outdir / "snapshots")
     changes = detect_changes(publications, snapshot_dir, run_id)
     logger.info(
@@ -129,7 +125,19 @@ def main() -> None:
         changes["count_total"] - changes["count_new"],
     )
 
-    # Save changes output with status
+    # Phase 3: Summarize NEW publications only
+    logger.info("Phase 3: Summarizing NEW publications")
+    summary_dir = str(outdir / "summaries")
+    new_pub_ids = {pub.id for pub in changes["new"]}
+    summaries = summarize_publications(publications, new_pub_ids, summary_dir)
+
+    # Add summaries to the all_with_status output
+    for pub_dict in changes["all_with_status"]:
+        if pub_dict["id"] in summaries:
+            pub_dict["essence_bullets"] = summaries[pub_dict["id"]].get("essence_bullets", [])
+            pub_dict["one_liner"] = summaries[pub_dict["id"]].get("one_liner", "")
+
+    # Save changes output with status and summaries
     if publications:
         changes_output_path = outdir / "raw" / f"{run_id}_changes.json"
         changes_output = {

@@ -75,6 +75,8 @@ def generate_report(
                 url = pub.get("url", "")
                 source = pub.get("source", "Unknown")
                 date = pub.get("date", "Unknown date")
+                one_liner = pub.get("one_liner", "")
+                essence_bullets = pub.get("essence_bullets", [])
 
                 # Format as Markdown link if URL exists
                 if url:
@@ -83,7 +85,19 @@ def generate_report(
                     f.write(f"- **{title}**\n")
 
                 f.write(f"  - Source: {source}\n")
-                f.write(f"  - Date: {date}\n\n")
+                f.write(f"  - Date: {date}\n")
+
+                # Add one-liner if available
+                if one_liner:
+                    f.write(f"  - *{one_liner}*\n")
+
+                # Add essence bullets if available
+                if essence_bullets:
+                    f.write("\n")
+                    for bullet in essence_bullets:
+                        f.write(f"  - {bullet}\n")
+
+                f.write("\n")
 
         # Unchanged publications section
         unchanged_count = count_total - count_new
