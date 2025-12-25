@@ -9,9 +9,11 @@
 
 sources:
   # RSS feed sources
+  # Note: Nature subject RSS feeds have been deprecated
+  # Using Nature Cancer journal feed instead
   - name: Nature Cancer
     type: rss
-    url: https://www.nature.com/subjects/cancer/rss
+    url: https://www.nature.com/natcancer.rss
 
   - name: Science News
     type: rss
