@@ -2,8 +2,10 @@
 """Main CLI entrypoint for acitrack."""
 
 import argparse
+import json
 import logging
 import sys
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -104,6 +106,14 @@ def main() -> None:
     logger.info("Phase 1: Fetching publications")
     publications = fetch_publications(sources, since_date, run_id, str(outdir))
     logger.info("Fetched %d publications", len(publications))
+
+    # Save raw publications to JSON
+    if publications:
+        raw_output_path = outdir / "raw" / f"{run_id}_publications.json"
+        with open(raw_output_path, "w") as f:
+            publications_data = [asdict(pub) for pub in publications]
+            json.dump(publications_data, f, indent=2)
+        logger.info("Saved raw publications to %s", raw_output_path)
 
     # Phase 2: Summarize publications
     logger.info("Phase 2: Summarizing publications")
