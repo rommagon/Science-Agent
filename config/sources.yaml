@@ -1,0 +1,29 @@
+# Sources configuration for acitrack
+#
+# Each source should have:
+#   - name: Human-readable name for the source
+#   - type: Source type (rss, web, api)
+#   - url: URL to fetch content from
+#
+# Additional fields may be added as needed for specific source types
+
+sources:
+  # RSS feed sources
+  - name: Nature Cancer
+    type: rss
+    url: https://www.nature.com/subjects/cancer/rss
+
+  - name: Science News
+    type: rss
+    url: https://www.science.org/rss/news_current.xml
+
+  # Web scraping sources
+  - name: SpotItEarly News
+    type: web
+    url: https://www.spotitearly.com/news
+
+  # Example placeholder for API sources
+  # - name: PubMed API
+  #   type: api
+  #   url: https://eutils.ncbi.nlm.nih.gov/entrez/eutils/
+  #   api_key: YOUR_API_KEY_HERE
