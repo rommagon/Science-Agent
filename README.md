@@ -90,16 +90,26 @@ python run.py --only-sources "Nature Cancer,PubMed - cancer (broad)"
 
 Edit `config/sources.yaml` to configure publication sources. Each source requires:
 - `name`: Human-readable source name
-- `type`: Source type (rss, web, api)
-- `url`: Source URL
+- `type`: Source type (rss, pubmed)
+- Additional fields depend on type (url for RSS, query for PubMed)
 
-Example:
+Example RSS source:
 ```yaml
 sources:
   - name: Nature Cancer
     type: rss
-    url: https://www.nature.com/subjects/cancer/rss
+    url: https://www.nature.com/natcancer.rss
 ```
+
+Example PubMed source:
+```yaml
+  - name: The Lancet
+    type: pubmed
+    query: 'journal:"The Lancet"'
+    retmax: 200
+```
+
+**Note on Historical Volumes:** Specific historical volumes or issues cited by leadership are treated as reference literature and are not ingested by the V1 "recent changes" engine. AciTrack V1 focuses exclusively on ongoing, forward-looking publication tracking.
 
 ## Running Weekly
 
