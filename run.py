@@ -16,7 +16,7 @@ import yaml
 from diff.detect_changes import detect_changes
 from enrich.commercial import enrich_publication_commercial
 from ingest.fetch import fetch_publications
-from output.report import generate_report
+from output.report import export_new_to_csv, generate_report
 from summarize.summarize import summarize_publications
 
 # Configure logging
@@ -114,6 +114,7 @@ def generate_manifest(
             "publications_json": f"data/raw/{run_id}_publications.json",
             "changes_json": f"data/raw/{run_id}_changes.json",
             "report_md": f"data/output/{run_id}_report.md",
+            "new_csv": f"data/output/{run_id}_new.csv",
             "manifest_json": f"data/output/{run_id}_manifest.json",
         },
     }
@@ -343,6 +344,10 @@ def main() -> None:
     # Phase 4: Generate report
     logger.info("Phase 4: Generating report")
     generate_report(str(outdir), run_id, args.max_items_per_source)
+
+    # Phase 4.5: Export NEW publications to CSV
+    logger.info("Phase 4.5: Exporting NEW publications to CSV")
+    export_new_to_csv(str(outdir), run_id)
 
     # Phase 5: Generate manifest
     logger.info("Phase 5: Generating manifest")

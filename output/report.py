@@ -1,5 +1,6 @@
 """Generate output reports from publications."""
 
+import csv
 import json
 import logging
 from datetime import datetime
@@ -229,3 +230,76 @@ def generate_report(
 
     logger.info("Markdown report saved to %s", report_path)
     print(f"Report saved: {report_path}")
+
+
+def export_new_to_csv(
+    outdir: str,
+    run_id: str,
+) -> None:
+    """Export NEW publications to CSV file.
+
+    Args:
+        outdir: Output directory for reports
+        run_id: Unique identifier for this run
+    """
+    logger.info("Exporting NEW publications to CSV for run %s", run_id)
+
+    # Load changes JSON
+    changes_path = Path(outdir) / "raw" / f"{run_id}_changes.json"
+    new_pubs = []
+
+    if changes_path.exists():
+        try:
+            with open(changes_path, "r") as f:
+                changes_data = json.load(f)
+            # Extract NEW publications only
+            publications = changes_data.get("publications", [])
+            new_pubs = [pub for pub in publications if pub.get("status") == "NEW"]
+        except Exception as e:
+            logger.error("Failed to load changes file: %s", e)
+    else:
+        logger.debug("Changes file not found (0 publications fetched): %s", changes_path)
+
+    # Create output directory
+    output_dir = Path(outdir) / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate CSV file
+    csv_path = output_dir / f"{run_id}_new.csv"
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        fieldnames = [
+            "id",
+            "title",
+            "source",
+            "date",
+            "url",
+            "one_liner",
+            "sponsor_names",
+            "company_names",
+            "has_sponsor_signal",
+            "company_affiliation_signal",
+        ]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for pub in new_pubs:
+            # Join sponsor and company names with semicolons
+            sponsor_names = ";".join(pub.get("sponsor_names", []))
+            company_names = ";".join(pub.get("company_names", []))
+
+            writer.writerow({
+                "id": pub.get("id", ""),
+                "title": pub.get("title", ""),
+                "source": pub.get("source", ""),
+                "date": pub.get("date", ""),
+                "url": pub.get("url", ""),
+                "one_liner": pub.get("one_liner", ""),
+                "sponsor_names": sponsor_names,
+                "company_names": company_names,
+                "has_sponsor_signal": pub.get("has_sponsor_signal", False),
+                "company_affiliation_signal": pub.get("company_affiliation_signal", False),
+            })
+
+    logger.info("CSV export saved to %s (%d NEW publications)", csv_path, len(new_pubs))
+    print(f"CSV export saved: {csv_path}")
