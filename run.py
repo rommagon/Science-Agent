@@ -2,6 +2,7 @@
 """Main CLI entrypoint for acitrack."""
 
 import argparse
+import hashlib
 import json
 import logging
 import sys
@@ -47,6 +48,85 @@ def load_sources(config_path: str) -> list[dict]:
         logger.warning("No sources configured in %s", config_path)
 
     return sources
+
+
+def compute_file_hash(file_path: str) -> str:
+    """Compute SHA256 hash of a file.
+
+    Args:
+        file_path: Path to file to hash
+
+    Returns:
+        Hex string of SHA256 hash
+    """
+    sha256 = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
+def generate_manifest(
+    run_id: str,
+    timestamp: str,
+    since_date: str,
+    config_path: str,
+    active_sources: list[str],
+    source_stats: list[dict],
+    count_new: int,
+    count_total: int,
+    outdir: Path,
+) -> None:
+    """Generate and save run manifest for provenance.
+
+    Args:
+        run_id: Unique identifier for this run
+        timestamp: ISO format timestamp
+        since_date: Since date in YYYY-MM-DD format
+        config_path: Path to config file
+        active_sources: List of active source names
+        source_stats: Per-source statistics from fetch
+        count_new: Count of new publications
+        count_total: Total count of publications
+        outdir: Output directory
+    """
+    # Compute config file hash
+    config_hash = compute_file_hash(config_path)
+
+    # Build manifest
+    manifest = {
+        "run_id": run_id,
+        "timestamp": timestamp,
+        "since_date": since_date,
+        "config": {
+            "path": config_path,
+            "sha256": config_hash,
+        },
+        "active_sources": active_sources,
+        "source_details": source_stats,
+        "counts": {
+            "total_fetched": count_total,
+            "total_new": count_new,
+            "total_unchanged": count_total - count_new,
+        },
+        "outputs": {
+            "publications_json": f"data/raw/{run_id}_publications.json",
+            "changes_json": f"data/raw/{run_id}_changes.json",
+            "report_md": f"data/output/{run_id}_report.md",
+            "manifest_json": f"data/output/{run_id}_manifest.json",
+        },
+    }
+
+    # Save manifest
+    output_dir = outdir / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / f"{run_id}_manifest.json"
+
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    logger.info("Saved manifest to %s", manifest_path)
+    print(f"Manifest saved: {manifest_path}")
 
 
 def main() -> None:
@@ -173,7 +253,7 @@ def main() -> None:
 
     # Phase 1: Fetch publications
     logger.info("Phase 1: Fetching publications")
-    publications = fetch_publications(sources, since_date, run_id, str(outdir))
+    publications, source_stats = fetch_publications(sources, since_date, run_id, str(outdir))
     logger.info("Fetched %d publications", len(publications))
 
     # Save raw publications to JSON
@@ -226,6 +306,20 @@ def main() -> None:
     # Phase 4: Generate report
     logger.info("Phase 4: Generating report")
     generate_report(str(outdir), run_id, args.max_items_per_source)
+
+    # Phase 5: Generate manifest
+    logger.info("Phase 5: Generating manifest")
+    generate_manifest(
+        run_id=run_id,
+        timestamp=datetime.now().isoformat(),
+        since_date=since_date.strftime("%Y-%m-%d"),
+        config_path=args.config,
+        active_sources=active_sources,
+        source_stats=source_stats,
+        count_new=changes["count_new"],
+        count_total=changes["count_total"],
+        outdir=outdir,
+    )
 
     # Summary
     print("\n" + "=" * 70)

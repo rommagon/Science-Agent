@@ -424,7 +424,7 @@ def _fetch_pubmed_source(
 
 def fetch_publications(
     sources: list[dict], since_date: datetime, run_id: str, outdir: str
-) -> list[Publication]:
+) -> tuple[list[Publication], list[dict]]:
     """Fetch publications from all configured sources.
 
     Args:
@@ -434,7 +434,7 @@ def fetch_publications(
         outdir: Output directory for data
 
     Returns:
-        List of Publication objects
+        Tuple of (List of Publication objects, List of per-source statistics)
     """
     logger.info(
         "Fetching publications from %d sources since %s",
@@ -443,6 +443,7 @@ def fetch_publications(
     )
 
     all_publications = []
+    source_stats = []
 
     for source in sources:
         source_type = source.get("type", "").lower()
@@ -451,13 +452,26 @@ def fetch_publications(
         if source_type == "rss":
             publications = _fetch_rss_source(source, since_date, run_id)
             all_publications.extend(publications)
+            source_stats.append({
+                "name": source_name,
+                "type": source_type,
+                "url": source.get("url", ""),
+                "kept": len(publications),
+            })
         elif source_type == "pubmed":
             publications = _fetch_pubmed_source(source, since_date, run_id)
             all_publications.extend(publications)
+            source_stats.append({
+                "name": source_name,
+                "type": source_type,
+                "query": source.get("query", ""),
+                "retmax": source.get("retmax", 200),
+                "kept": len(publications),
+            })
         else:
             logger.warning(
                 "Source '%s' has unsupported type '%s', skipping", source_name, source_type
             )
 
     logger.info("Total publications fetched: %d", len(all_publications))
-    return all_publications
+    return all_publications, source_stats
