@@ -18,6 +18,11 @@ USER_AGENT = "acitrack-v1/0.1 (+https://github.com/spotitearly/acitrack)"
 REQUEST_TIMEOUT = 15  # seconds
 MAX_REDIRECTS = 5
 
+# PubMed E-utilities configuration
+PUBMED_ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+PUBMED_ESUMMARY_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+PUBMED_POLITENESS_DELAY = 0.34  # seconds between API calls
+
 
 def _parse_rss_date(date_str: str = None, time_struct: time.struct_time = None) -> Optional[datetime]:
     """Parse RSS date from string or time_struct.
@@ -212,6 +217,211 @@ def _fetch_rss_source(
         return []
 
 
+def _parse_pubmed_date(date_str: str) -> Optional[datetime]:
+    """Parse PubMed date string to datetime object.
+
+    Args:
+        date_str: Date string from PubMed (format: YYYY/MM/DD or YYYY Mon DD)
+
+    Returns:
+        datetime object or None if parsing fails
+    """
+    if not date_str:
+        return None
+
+    try:
+        # Try YYYY/MM/DD format
+        if '/' in date_str:
+            parts = date_str.split('/')
+            if len(parts) == 3:
+                year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+                return datetime(year, month, day)
+
+        # Try YYYY Mon DD format
+        if ' ' in date_str:
+            from dateutil import parser
+            return parser.parse(date_str)
+
+    except Exception as e:
+        logger.debug("Failed to parse PubMed date '%s': %s", date_str, e)
+
+    return None
+
+
+def _fetch_pubmed_source(
+    source: dict, since_date: datetime, run_id: str
+) -> list[Publication]:
+    """Fetch publications from PubMed using E-utilities.
+
+    Args:
+        source: Source configuration dictionary
+        since_date: Only fetch publications newer than this date
+        run_id: Unique identifier for this run
+
+    Returns:
+        List of Publication objects from this source
+    """
+    source_name = source.get("name", "Unknown")
+    query = source.get("query")
+    retmax = source.get("retmax", 200)
+
+    if not query:
+        logger.error("Source '%s' has no query configured", source_name)
+        return []
+
+    try:
+        logger.info("Fetching PubMed publications: %s (query: '%s', retmax: %d)",
+                    source_name, query, retmax)
+
+        # Format dates for PubMed
+        mindate = since_date.strftime("%Y/%m/%d")
+        maxdate = datetime.now().strftime("%Y/%m/%d")
+
+        # Step 1: ESearch to get PMIDs
+        esearch_params = {
+            "db": "pubmed",
+            "term": query,
+            "retmax": retmax,
+            "retstart": 0,
+            "sort": "date",
+            "datetype": "pdat",
+            "mindate": mindate,
+            "maxdate": maxdate,
+            "retmode": "json"
+        }
+
+        logger.info("Source '%s': searching PubMed from %s to %s", source_name, mindate, maxdate)
+
+        response = requests.get(
+            PUBMED_ESEARCH_URL,
+            params=esearch_params,
+            headers={"User-Agent": USER_AGENT},
+            timeout=REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+
+        search_result = response.json()
+        pmids = search_result.get("esearchresult", {}).get("idlist", [])
+
+        if not pmids:
+            logger.info("Source '%s': no PMIDs found", source_name)
+            return []
+
+        logger.info("Source '%s': found %d PMIDs", source_name, len(pmids))
+
+        # Be polite to NCBI
+        time.sleep(PUBMED_POLITENESS_DELAY)
+
+        # Step 2: ESummary to get publication details
+        esummary_params = {
+            "db": "pubmed",
+            "id": ",".join(pmids),
+            "retmode": "json"
+        }
+
+        response = requests.get(
+            PUBMED_ESUMMARY_URL,
+            params=esummary_params,
+            headers={"User-Agent": USER_AGENT},
+            timeout=REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+
+        summary_result = response.json()
+        results = summary_result.get("result", {})
+
+        publications = []
+        fetched_count = 0
+        missing_date_count = 0
+
+        for pmid in pmids:
+            if pmid not in results or pmid == "uids":
+                continue
+
+            article = results[pmid]
+            fetched_count += 1
+
+            # Extract title
+            title = article.get("title", "Untitled")
+            if title.endswith("."):
+                title = title[:-1]  # Remove trailing period
+
+            # Extract authors
+            authors = []
+            author_list = article.get("authors", [])
+            for author in author_list:
+                if isinstance(author, dict):
+                    name = author.get("name", "")
+                    if name:
+                        authors.append(name)
+
+            # Extract and parse date
+            pub_date = None
+            pubdate_str = article.get("pubdate", "")
+            if pubdate_str:
+                pub_date = _parse_pubmed_date(pubdate_str)
+
+            # If no date available, use current time and log warning
+            if not pub_date:
+                pub_date = datetime.now()
+                missing_date_count += 1
+                logger.warning(
+                    "Source '%s': PMID %s has no parseable date, using current time",
+                    source_name,
+                    pmid
+                )
+
+            # Apply date filter
+            if pub_date < since_date:
+                continue
+
+            # Build URL
+            url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+
+            # Extract journal and source info for raw_text
+            source_info = article.get("source", "")
+            fulljournalname = article.get("fulljournalname", "")
+            raw_text = f"Journal: {fulljournalname or source_info}"
+
+            # Create Publication object
+            pub_id = compute_id(title, source_name, url)
+            publication = Publication(
+                id=pub_id,
+                title=title,
+                authors=authors,
+                source=source_name,
+                date=pub_date.isoformat(),
+                url=url,
+                raw_text=raw_text,
+                summary="",  # Will be filled by summarization step
+                run_id=run_id,
+            )
+            publications.append(publication)
+
+        logger.info(
+            "Source '%s': fetched %d articles, kept %d after date filter (%d missing dates)",
+            source_name,
+            fetched_count,
+            len(publications),
+            missing_date_count
+        )
+        return publications
+
+    except requests.exceptions.Timeout:
+        logger.error(
+            "Source '%s': PubMed request timed out after %ds",
+            source_name,
+            REQUEST_TIMEOUT
+        )
+        return []
+    except requests.exceptions.RequestException as e:
+        logger.error("Source '%s': PubMed API request failed: %s", source_name, e)
+        return []
+    except Exception as e:
+        logger.error("Source '%s': unexpected error: %s", source_name, e)
+        return []
+
+
 def fetch_publications(
     sources: list[dict], since_date: datetime, run_id: str, outdir: str
 ) -> list[Publication]:
@@ -240,6 +450,9 @@ def fetch_publications(
 
         if source_type == "rss":
             publications = _fetch_rss_source(source, since_date, run_id)
+            all_publications.extend(publications)
+        elif source_type == "pubmed":
+            publications = _fetch_pubmed_source(source, since_date, run_id)
             all_publications.extend(publications)
         else:
             logger.warning(

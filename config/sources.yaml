@@ -19,13 +19,13 @@ sources:
     type: rss
     url: https://www.science.org/rss/news_current.xml
 
-  # Web scraping sources
-  - name: SpotItEarly News
-    type: web
-    url: https://www.spotitearly.com/news
+  # PubMed E-utilities sources
+  - name: PubMed - cancer (broad)
+    type: pubmed
+    query: cancer
+    retmax: 200
 
-  # Example placeholder for API sources
-  # - name: PubMed API
-  #   type: api
-  #   url: https://eutils.ncbi.nlm.nih.gov/entrez/eutils/
-  #   api_key: YOUR_API_KEY_HERE
+  # Web scraping sources (not yet implemented)
+  # - name: SpotItEarly News
+  #   type: web
+  #   url: https://www.spotitearly.com/news
