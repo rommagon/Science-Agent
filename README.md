@@ -35,11 +35,34 @@ Run the tracker with default settings (last 7 days):
 python run.py
 ```
 
+### Demo Mode
+
+Try the tracker quickly with a small dataset:
+```bash
+python run.py --reset-snapshot --since-days 7 --max-items-per-source 5
+```
+
+This resets the snapshot (marks all items as NEW), fetches the last 7 days, and limits output to 5 items per source for a quick test run.
+
 ### Options
 
+#### Time Range
 - `--since-days N`: Fetch publications from the last N days (default: 7)
+- `--since-date YYYY-MM-DD`: Fetch publications since this specific date (overrides --since-days)
+
+#### Output Control
+- `--max-items-per-source N`: Maximum items to include per source in report/output (still ingests all items)
+- `--max-new-to-summarize N`: Maximum NEW items to summarize (default: 200). Most recent items by date are prioritized.
+- `--max-new-to-enrich N`: Maximum NEW items to enrich with commercial signals (default: 500). Most recent items by date are prioritized.
+
+#### Source Filtering
+- `--only-sources NAMES`: Comma-separated list of source names to include (run only these sources)
+- `--exclude-sources NAMES`: Comma-separated list of source names to exclude (skip these sources)
+
+#### Configuration
 - `--config PATH`: Path to sources configuration file (default: config/sources.yaml)
 - `--outdir PATH`: Output directory for data (default: data)
+- `--reset-snapshot`: Delete snapshot before running (all items will be marked as NEW)
 
 ### Examples
 
@@ -53,9 +76,14 @@ Use a custom configuration file:
 python run.py --config my-sources.yaml
 ```
 
-Specify output directory:
+Limit summarization for cost control:
 ```bash
-python run.py --outdir /path/to/output
+python run.py --max-new-to-summarize 50 --max-new-to-enrich 100
+```
+
+Run only specific sources:
+```bash
+python run.py --only-sources "Nature Cancer,PubMed - cancer (broad)"
 ```
 
 ## Configuration

@@ -167,7 +167,8 @@ def generate_manifest(
 def main() -> None:
     """Main CLI entrypoint."""
     parser = argparse.ArgumentParser(
-        description="acitrack - Track and summarize cancer research publications"
+        description="acitrack - Track and summarize cancer research publications",
+        epilog="Demo mode: python run.py --reset-snapshot --since-days 7 --max-items-per-source 5"
     )
     parser.add_argument(
         "--since-days",
@@ -201,6 +202,18 @@ def main() -> None:
         help="Maximum items to include per source in report/output (still ingests all items)",
     )
     parser.add_argument(
+        "--max-new-to-summarize",
+        type=int,
+        default=200,
+        help="Maximum NEW items to summarize (default: 200). Most recent items by date are prioritized.",
+    )
+    parser.add_argument(
+        "--max-new-to-enrich",
+        type=int,
+        default=500,
+        help="Maximum NEW items to enrich with commercial signals (default: 500). Most recent items by date are prioritized.",
+    )
+    parser.add_argument(
         "--config",
         type=str,
         default="config/sources.yaml",
@@ -214,6 +227,10 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    # Print demo command hint
+    if len(sys.argv) == 1:
+        print("\nDemo mode: python run.py --reset-snapshot --since-days 7 --max-items-per-source 5\n")
 
     # Generate unique run ID
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
@@ -312,7 +329,33 @@ def main() -> None:
     # Phase 3: Summarize NEW publications only
     logger.info("Phase 3: Summarizing NEW publications")
     summary_dir = str(outdir / "summaries")
-    new_pub_ids = {pub.id for pub in changes["new"]}
+
+    # Apply summarization cap: select most recent N items by date
+    new_pubs = changes["new"]
+    if len(new_pubs) > args.max_new_to_summarize:
+        logger.warning(
+            "NEW publications (%d) exceed --max-new-to-summarize (%d). "
+            "Summarizing only the %d most recent items by date.",
+            len(new_pubs),
+            args.max_new_to_summarize,
+            args.max_new_to_summarize,
+        )
+        print(f"\n⚠️  WARNING: {len(new_pubs)} NEW items exceed summarization cap of {args.max_new_to_summarize}")
+        print(f"   Summarizing only the {args.max_new_to_summarize} most recent items by date.\n")
+
+        # Sort by date (most recent first), then take top N
+        sorted_new_pubs = sorted(
+            new_pubs,
+            key=lambda p: p.date if p.date else "",
+            reverse=True
+        )
+        pubs_to_summarize = sorted_new_pubs[:args.max_new_to_summarize]
+        new_pub_ids = {pub.id for pub in pubs_to_summarize}
+        skipped_summary_ids = {pub.id for pub in sorted_new_pubs[args.max_new_to_summarize:]}
+    else:
+        new_pub_ids = {pub.id for pub in new_pubs}
+        skipped_summary_ids = set()
+
     summaries = summarize_publications(publications, new_pub_ids, summary_dir)
 
     # Add summaries to the all_with_status output
@@ -320,40 +363,76 @@ def main() -> None:
         if pub_dict["id"] in summaries:
             pub_dict["essence_bullets"] = summaries[pub_dict["id"]].get("essence_bullets", [])
             pub_dict["one_liner"] = summaries[pub_dict["id"]].get("one_liner", "")
+        elif pub_dict["id"] in skipped_summary_ids:
+            # Mark skipped items with stub
+            pub_dict["essence_bullets"] = []
+            pub_dict["one_liner"] = "Summary skipped due to cap."
 
     # Phase 3.5: Enrich NEW publications with commercial signals
     logger.info("Phase 3.5: Enriching NEW publications with commercial signals")
+
+    # Apply enrichment cap: select most recent N items by date
+    new_items_with_status = [p for p in changes["all_with_status"] if p.get("status") == "NEW"]
+    if len(new_items_with_status) > args.max_new_to_enrich:
+        logger.warning(
+            "NEW publications (%d) exceed --max-new-to-enrich (%d). "
+            "Enriching only the %d most recent items by date.",
+            len(new_items_with_status),
+            args.max_new_to_enrich,
+            args.max_new_to_enrich,
+        )
+        print(f"\n⚠️  WARNING: {len(new_items_with_status)} NEW items exceed enrichment cap of {args.max_new_to_enrich}")
+        print(f"   Enriching only the {args.max_new_to_enrich} most recent items by date.\n")
+
+        # Sort by date (most recent first), then take top N
+        sorted_new_items = sorted(
+            new_items_with_status,
+            key=lambda p: p.get("date", ""),
+            reverse=True
+        )
+        ids_to_enrich = {p["id"] for p in sorted_new_items[:args.max_new_to_enrich]}
+    else:
+        ids_to_enrich = {p["id"] for p in new_items_with_status}
+
     commercial_signals_count = 0
     for pub_dict in changes["all_with_status"]:
         if pub_dict.get("status") == "NEW":
-            # Build combined text from all available fields for thorough scanning
-            text_parts = [
-                pub_dict.get("title", ""),
-                pub_dict.get("raw_text", ""),
-                pub_dict.get("one_liner", ""),
-            ]
-            # Add essence bullets if present
-            essence_bullets = pub_dict.get("essence_bullets", [])
-            if essence_bullets:
-                text_parts.append("\n".join(essence_bullets))
+            if pub_dict["id"] in ids_to_enrich:
+                # Build combined text from all available fields for thorough scanning
+                text_parts = [
+                    pub_dict.get("title", ""),
+                    pub_dict.get("raw_text", ""),
+                    pub_dict.get("one_liner", ""),
+                ]
+                # Add essence bullets if present
+                essence_bullets = pub_dict.get("essence_bullets", [])
+                if essence_bullets:
+                    text_parts.append("\n".join(essence_bullets))
 
-            combined_text = "\n".join(filter(None, text_parts))
+                combined_text = "\n".join(filter(None, text_parts))
 
-            # Enrich with commercial signals (uses cache if available)
-            commercial = enrich_publication_commercial(
-                publication_id=pub_dict["id"],
-                text=combined_text,
-                cache_dir=summary_dir,
-            )
-            # Add commercial fields to publication
-            pub_dict["has_sponsor_signal"] = commercial["has_sponsor_signal"]
-            pub_dict["sponsor_names"] = commercial["sponsor_names"]
-            pub_dict["company_affiliation_signal"] = commercial["company_affiliation_signal"]
-            pub_dict["company_names"] = commercial["company_names"]
-            pub_dict["evidence_snippets"] = commercial["evidence_snippets"]
+                # Enrich with commercial signals (uses cache if available)
+                commercial = enrich_publication_commercial(
+                    publication_id=pub_dict["id"],
+                    text=combined_text,
+                    cache_dir=summary_dir,
+                )
+                # Add commercial fields to publication
+                pub_dict["has_sponsor_signal"] = commercial["has_sponsor_signal"]
+                pub_dict["sponsor_names"] = commercial["sponsor_names"]
+                pub_dict["company_affiliation_signal"] = commercial["company_affiliation_signal"]
+                pub_dict["company_names"] = commercial["company_names"]
+                pub_dict["evidence_snippets"] = commercial["evidence_snippets"]
 
-            if commercial["has_sponsor_signal"] or commercial["company_affiliation_signal"]:
-                commercial_signals_count += 1
+                if commercial["has_sponsor_signal"] or commercial["company_affiliation_signal"]:
+                    commercial_signals_count += 1
+            else:
+                # Skipped due to cap - set default empty values
+                pub_dict["has_sponsor_signal"] = False
+                pub_dict["sponsor_names"] = []
+                pub_dict["company_affiliation_signal"] = False
+                pub_dict["company_names"] = []
+                pub_dict["evidence_snippets"] = []
 
     logger.info("Commercial signals detected in %d publications", commercial_signals_count)
 
