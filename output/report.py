@@ -11,12 +11,14 @@ logger = logging.getLogger(__name__)
 def generate_report(
     outdir: str,
     run_id: str,
+    max_items_per_source: int = None,
 ) -> None:
     """Generate and save a Markdown report from changes.
 
     Args:
         outdir: Output directory for reports
         run_id: Unique identifier for this run
+        max_items_per_source: Maximum items to include per source (None = no limit)
     """
     logger.info("Generating Markdown report for run %s", run_id)
 
@@ -49,6 +51,32 @@ def generate_report(
 
     # Sort unchanged publications by date descending
     unchanged_pubs.sort(key=lambda p: p.get("date", ""), reverse=True)
+
+    # Apply max_items_per_source limit if specified
+    if max_items_per_source:
+        # Limit new publications per source
+        limited_new_pubs = []
+        source_counts = {}
+        for pub in new_pubs:
+            source = pub.get("source", "Unknown")
+            count = source_counts.get(source, 0)
+            if count < max_items_per_source:
+                limited_new_pubs.append(pub)
+                source_counts[source] = count + 1
+        new_pubs = limited_new_pubs
+
+        # Limit unchanged publications per source
+        limited_unchanged_pubs = []
+        source_counts = {}
+        for pub in unchanged_pubs:
+            source = pub.get("source", "Unknown")
+            count = source_counts.get(source, 0)
+            if count < max_items_per_source:
+                limited_unchanged_pubs.append(pub)
+                source_counts[source] = count + 1
+        unchanged_pubs = limited_unchanged_pubs
+
+        logger.info("Applied max_items_per_source=%d limit to report", max_items_per_source)
 
     # Create output directory
     output_dir = Path(outdir) / "output"

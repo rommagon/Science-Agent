@@ -61,6 +61,31 @@ def main() -> None:
         help="Fetch publications from the last N days (default: 7)",
     )
     parser.add_argument(
+        "--since-date",
+        type=str,
+        help="Fetch publications since this date (YYYY-MM-DD format, overrides --since-days)",
+    )
+    parser.add_argument(
+        "--reset-snapshot",
+        action="store_true",
+        help="Delete snapshot before running (all items will be marked as NEW)",
+    )
+    parser.add_argument(
+        "--only-sources",
+        type=str,
+        help="Comma-separated list of source names to include (run only these sources)",
+    )
+    parser.add_argument(
+        "--exclude-sources",
+        type=str,
+        help="Comma-separated list of source names to exclude (skip these sources)",
+    )
+    parser.add_argument(
+        "--max-items-per-source",
+        type=int,
+        help="Maximum items to include per source in report/output (still ingests all items)",
+    )
+    parser.add_argument(
         "--config",
         type=str,
         default="config/sources.yaml",
@@ -78,8 +103,15 @@ def main() -> None:
     # Generate unique run ID
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
 
-    # Calculate cutoff date
-    since_date = datetime.now() - timedelta(days=args.since_days)
+    # Calculate cutoff date - --since-date overrides --since-days
+    if args.since_date:
+        try:
+            since_date = datetime.strptime(args.since_date, "%Y-%m-%d")
+        except ValueError:
+            logger.error("Invalid date format for --since-date. Use YYYY-MM-DD format.")
+            sys.exit(1)
+    else:
+        since_date = datetime.now() - timedelta(days=args.since_days)
 
     # Ensure output directories exist
     outdir = Path(args.outdir)
@@ -88,8 +120,42 @@ def main() -> None:
     (outdir / "summaries").mkdir(exist_ok=True)
     (outdir / "snapshots").mkdir(exist_ok=True)
 
+    # Handle snapshot reset
+    if args.reset_snapshot:
+        snapshot_path = outdir / "snapshots" / "latest.json"
+        if snapshot_path.exists():
+            snapshot_path.unlink()
+            print("\n" + "!" * 70)
+            print("SNAPSHOT RESET")
+            print("!" * 70)
+            print("Deleted: data/snapshots/latest.json")
+            print("Next run will mark all items as NEW.")
+            print("!" * 70 + "\n")
+        else:
+            print("\n" + "!" * 70)
+            print("SNAPSHOT RESET")
+            print("!" * 70)
+            print("No existing snapshot found.")
+            print("Next run will mark all items as NEW.")
+            print("!" * 70 + "\n")
+
     # Load source configurations
     sources = load_sources(args.config)
+
+    # Apply source filtering
+    only_sources = None
+    exclude_sources = None
+
+    if args.only_sources:
+        only_sources = [s.strip() for s in args.only_sources.split(",")]
+        sources = [s for s in sources if s.get("name") in only_sources]
+
+    if args.exclude_sources:
+        exclude_sources = [s.strip() for s in args.exclude_sources.split(",")]
+        sources = [s for s in sources if s.get("name") not in exclude_sources]
+
+    # Get active source names
+    active_sources = [s.get("name", "Unknown") for s in sources]
 
     # Print execution plan
     print("\n" + "=" * 70)
@@ -97,9 +163,12 @@ def main() -> None:
     print("=" * 70)
     print(f"Run ID:          {run_id}")
     print(f"Sources:         {len(sources)}")
+    print(f"Active sources:  {', '.join(active_sources) if active_sources else 'None'}")
     print(f"Since:           {since_date.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Config:          {args.config}")
     print(f"Output dir:      {args.outdir}")
+    if args.max_items_per_source:
+        print(f"Max items/src:   {args.max_items_per_source}")
     print("=" * 70 + "\n")
 
     # Phase 1: Fetch publications
@@ -143,6 +212,9 @@ def main() -> None:
         changes_output = {
             "run_id": run_id,
             "timestamp": datetime.now().isoformat(),
+            "since_date": since_date.strftime("%Y-%m-%d"),
+            "active_sources": active_sources,
+            "max_items_per_source": args.max_items_per_source,
             "count_new": changes["count_new"],
             "count_total": changes["count_total"],
             "publications": changes["all_with_status"],
@@ -153,7 +225,7 @@ def main() -> None:
 
     # Phase 4: Generate report
     logger.info("Phase 4: Generating report")
-    generate_report(str(outdir), run_id)
+    generate_report(str(outdir), run_id, args.max_items_per_source)
 
     # Summary
     print("\n" + "=" * 70)
