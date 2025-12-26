@@ -1,0 +1,55 @@
+name: Weekly AciTrack Run
+
+on:
+  # Run every Saturday at 00:00 UTC
+  schedule:
+    - cron: '0 0 * * 6'
+
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      since_days:
+        description: 'Number of days to look back'
+        required: false
+        default: '7'
+      max_items_per_source:
+        description: 'Max items per source'
+        required: false
+        default: '10'
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run acitrack
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python run.py --since-days ${{ github.event.inputs.since_days || '7' }} --max-items-per-source ${{ github.event.inputs.max_items_per_source || '10' }}
+
+      - name: Upload outputs as artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acitrack-outputs-${{ github.run_number }}
+          path: |
+            data/output/*_report.md
+            data/output/*_new.csv
+            data/output/*_manifest.json
+            data/output/latest_*
+          retention-days: 90

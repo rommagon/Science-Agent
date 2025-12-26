@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import logging
+import shutil
 import sys
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -67,6 +68,35 @@ def compute_file_hash(file_path: str) -> str:
     return sha256.hexdigest()
 
 
+def create_latest_pointers(run_id: str, outdir: Path) -> None:
+    """Create latest_* pointer files by copying run-specific outputs.
+
+    Args:
+        run_id: Run identifier for this execution
+        outdir: Output directory (data/)
+    """
+    output_dir = outdir / "output"
+
+    # Define the files to create pointers for
+    files_to_copy = [
+        (f"{run_id}_report.md", "latest_report.md"),
+        (f"{run_id}_new.csv", "latest_new.csv"),
+        (f"{run_id}_manifest.json", "latest_manifest.json"),
+    ]
+
+    for source_file, dest_file in files_to_copy:
+        source_path = output_dir / source_file
+        dest_path = output_dir / dest_file
+
+        if source_path.exists():
+            shutil.copy2(source_path, dest_path)
+            logger.info("Created latest pointer: %s -> %s", source_file, dest_file)
+        else:
+            logger.warning("Source file not found for latest pointer: %s", source_path)
+
+    print(f"Latest pointers created in {output_dir}")
+
+
 def generate_manifest(
     run_id: str,
     timestamp: str,
@@ -116,6 +146,9 @@ def generate_manifest(
             "report_md": f"data/output/{run_id}_report.md",
             "new_csv": f"data/output/{run_id}_new.csv",
             "manifest_json": f"data/output/{run_id}_manifest.json",
+            "latest_report_md": "data/output/latest_report.md",
+            "latest_new_csv": "data/output/latest_new.csv",
+            "latest_manifest_json": "data/output/latest_manifest.json",
         },
     }
 
@@ -362,6 +395,10 @@ def main() -> None:
         count_total=changes["count_total"],
         outdir=outdir,
     )
+
+    # Phase 6: Create latest pointers
+    logger.info("Phase 6: Creating latest pointers")
+    create_latest_pointers(run_id, outdir)
 
     # Summary
     print("\n" + "=" * 70)

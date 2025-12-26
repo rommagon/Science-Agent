@@ -73,6 +73,56 @@ sources:
     url: https://www.nature.com/subjects/cancer/rss
 ```
 
+## Running Weekly
+
+### Automated Runs with GitHub Actions
+
+The repository includes a GitHub Actions workflow that runs acitrack automatically every Saturday at 00:00 UTC.
+
+#### Enabling the Weekly Schedule
+
+The workflow is defined in `.github/workflows/weekly_acitrack.yml` and will run automatically once pushed to your repository. The schedule can be modified by editing the cron expression in the workflow file.
+
+#### Manual Trigger
+
+You can manually trigger a run from the GitHub Actions tab:
+1. Go to the "Actions" tab in your repository
+2. Select "Weekly AciTrack Run" from the workflows list
+3. Click "Run workflow"
+4. Optionally configure:
+   - Number of days to look back (default: 7)
+   - Max items per source (default: 10)
+
+#### Setting Up Secrets (Optional)
+
+To enable AI-powered summaries in automated runs, add your OpenAI API key as a repository secret:
+
+1. Go to Settings > Secrets and variables > Actions
+2. Click "New repository secret"
+3. Name: `OPENAI_API_KEY`
+4. Value: Your OpenAI API key
+
+**Note:** The workflow will run successfully even without this secret, but will use stub summaries instead of real AI-generated ones.
+
+#### Accessing Results
+
+After each workflow run:
+- Go to the "Actions" tab and select the completed run
+- Download the artifacts containing:
+  - `*_report.md` - Full markdown report
+  - `*_new.csv` - CSV export of new publications
+  - `*_manifest.json` - Run provenance manifest
+  - `latest_*` - Latest pointer files
+
+#### Latest Pointers
+
+After every successful run (local or automated), the following "latest" pointer files are created:
+- `data/output/latest_report.md` - Copy of the most recent report
+- `data/output/latest_new.csv` - Copy of the most recent new publications CSV
+- `data/output/latest_manifest.json` - Copy of the most recent manifest
+
+These files make it easy to access the most recent results without knowing the specific run ID.
+
 ## Development Status
 
 This is the initial scaffold. Core functionality (fetching, summarization, change detection, reporting) is currently stubbed and will be implemented in future iterations.
