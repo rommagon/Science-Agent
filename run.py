@@ -292,10 +292,23 @@ def main() -> None:
     commercial_signals_count = 0
     for pub_dict in changes["all_with_status"]:
         if pub_dict.get("status") == "NEW":
+            # Build combined text from all available fields for thorough scanning
+            text_parts = [
+                pub_dict.get("title", ""),
+                pub_dict.get("raw_text", ""),
+                pub_dict.get("one_liner", ""),
+            ]
+            # Add essence bullets if present
+            essence_bullets = pub_dict.get("essence_bullets", [])
+            if essence_bullets:
+                text_parts.append("\n".join(essence_bullets))
+
+            combined_text = "\n".join(filter(None, text_parts))
+
             # Enrich with commercial signals (uses cache if available)
             commercial = enrich_publication_commercial(
                 publication_id=pub_dict["id"],
-                text=pub_dict.get("raw_text", ""),
+                text=combined_text,
                 cache_dir=summary_dir,
             )
             # Add commercial fields to publication

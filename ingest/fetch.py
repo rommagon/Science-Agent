@@ -217,17 +217,31 @@ def _fetch_rss_source(
         return []
 
 
-def _parse_pubmed_date(date_str: str) -> Optional[datetime]:
-    """Parse PubMed date string to datetime object.
+def _parse_pubmed_date(date_str: str) -> tuple[Optional[datetime], bool]:
+    """Parse PubMed date string to datetime object with best-effort handling.
 
     Args:
-        date_str: Date string from PubMed (format: YYYY/MM/DD or YYYY Mon DD)
+        date_str: Date string from PubMed (various formats)
 
     Returns:
-        datetime object or None if parsing fails
+        Tuple of (datetime object or None, missing_date_flag)
+        missing_date_flag is True if no date could be parsed
     """
     if not date_str:
-        return None
+        return None, True
+
+    # Month name to number mapping
+    month_map = {
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+        'january': 1, 'february': 2, 'march': 3, 'april': 4, 'june': 6,
+        'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
+    }
+
+    # Season to month mapping (conservative: use first month of season)
+    season_map = {
+        'winter': 1, 'spring': 4, 'summer': 7, 'fall': 10, 'autumn': 10
+    }
 
     try:
         # Try YYYY/MM/DD format
@@ -235,22 +249,61 @@ def _parse_pubmed_date(date_str: str) -> Optional[datetime]:
             parts = date_str.split('/')
             if len(parts) == 3:
                 year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
-                return datetime(year, month, day)
+                return datetime(year, month, day), False
 
-        # Try YYYY Mon DD format
-        if ' ' in date_str:
-            from dateutil import parser
-            return parser.parse(date_str)
+        # Try structured parsing for various formats
+        date_lower = date_str.lower().strip()
+
+        # YYYY only (e.g., "2025")
+        if date_lower.isdigit() and len(date_lower) == 4:
+            year = int(date_lower)
+            logger.debug("Parsed year-only date '%s' as %d-01-01", date_str, year)
+            return datetime(year, 1, 1), False
+
+        # YYYY Mon format (e.g., "2025 Nov")
+        parts = date_lower.split()
+        if len(parts) == 2 and parts[0].isdigit() and len(parts[0]) == 4:
+            year = int(parts[0])
+            month_str = parts[1].replace('-', ' ').split()[0]  # Handle "Nov-Dec" -> "Nov"
+
+            # Check if it's a season
+            if month_str in season_map:
+                month = season_map[month_str]
+                logger.debug("Parsed season date '%s' as %d-%02d-01", date_str, year, month)
+                return datetime(year, month, 1), False
+
+            # Check if it's a month name
+            if month_str in month_map:
+                month = month_map[month_str]
+                logger.debug("Parsed year-month date '%s' as %d-%02d-01", date_str, year, month)
+                return datetime(year, month, 1), False
+
+        # YYYY Mon DD format (e.g., "2025 Nov 15")
+        if len(parts) == 3 and parts[0].isdigit() and len(parts[0]) == 4:
+            year = int(parts[0])
+            month_str = parts[1]
+            if month_str in month_map and parts[2].isdigit():
+                month = month_map[month_str]
+                day = int(parts[2])
+                return datetime(year, month, day), False
+
+        # Fallback: try dateutil parser
+        try:
+            from dateutil import parser as date_parser
+            parsed = date_parser.parse(date_str)
+            return parsed, False
+        except Exception:
+            pass
 
     except Exception as e:
         logger.debug("Failed to parse PubMed date '%s': %s", date_str, e)
 
-    return None
+    return None, True
 
 
 def _fetch_pubmed_source(
     source: dict, since_date: datetime, run_id: str
-) -> list[Publication]:
+) -> tuple[list[Publication], int]:
     """Fetch publications from PubMed using E-utilities.
 
     Args:
@@ -259,7 +312,7 @@ def _fetch_pubmed_source(
         run_id: Unique identifier for this run
 
     Returns:
-        List of Publication objects from this source
+        Tuple of (List of Publication objects, missing_date_count)
     """
     source_name = source.get("name", "Unknown")
     query = source.get("query")
@@ -267,7 +320,7 @@ def _fetch_pubmed_source(
 
     if not query:
         logger.error("Source '%s' has no query configured", source_name)
-        return []
+        return [], 0
 
     try:
         logger.info("Fetching PubMed publications: %s (query: '%s', retmax: %d)",
@@ -305,7 +358,7 @@ def _fetch_pubmed_source(
 
         if not pmids:
             logger.info("Source '%s': no PMIDs found", source_name)
-            return []
+            return [], 0
 
         logger.info("Source '%s': found %d PMIDs", source_name, len(pmids))
 
@@ -357,31 +410,37 @@ def _fetch_pubmed_source(
 
             # Extract and parse date
             pub_date = None
+            missing_date = False
             pubdate_str = article.get("pubdate", "")
             if pubdate_str:
-                pub_date = _parse_pubmed_date(pubdate_str)
+                pub_date, missing_date = _parse_pubmed_date(pubdate_str)
+            else:
+                missing_date = True
 
-            # If no date available, use current time and log warning
-            if not pub_date:
-                pub_date = datetime.now()
+            # Track missing dates
+            if missing_date:
                 missing_date_count += 1
-                logger.warning(
-                    "Source '%s': PMID %s has no parseable date, using current time",
+                logger.debug(
+                    "Source '%s': PMID %s has no parseable date",
                     source_name,
                     pmid
                 )
 
-            # Apply date filter
-            if pub_date < since_date:
+            # Apply date filter - skip items with missing dates OR dates before cutoff
+            if pub_date and pub_date < since_date:
                 continue
 
             # Build URL
             url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
 
-            # Extract journal and source info for raw_text
+            # Extract journal and source info for improved raw_text
             source_info = article.get("source", "")
             fulljournalname = article.get("fulljournalname", "")
-            raw_text = f"Journal: {fulljournalname or source_info}"
+            authors_str = ", ".join(authors) if authors else "N/A"
+            date_str = pub_date.strftime("%Y-%m-%d") if pub_date else "MISSING"
+
+            # Build metadata block for downstream enrichment
+            raw_text = f"Journal: {fulljournalname or source_info}\nAuthors: {authors_str}\nPubDate: {date_str}"
 
             # Create Publication object
             pub_id = compute_id(title, source_name, url)
@@ -390,7 +449,7 @@ def _fetch_pubmed_source(
                 title=title,
                 authors=authors,
                 source=source_name,
-                date=pub_date.isoformat(),
+                date=pub_date.isoformat() if pub_date else "",
                 url=url,
                 raw_text=raw_text,
                 summary="",  # Will be filled by summarization step
@@ -398,14 +457,15 @@ def _fetch_pubmed_source(
             )
             publications.append(publication)
 
+        kept_count = len(publications)
         logger.info(
-            "Source '%s': fetched %d articles, kept %d after date filter (%d missing dates)",
+            "Source '%s': fetched %d articles, kept %d after date filter, missing_date_count: %d",
             source_name,
             fetched_count,
-            len(publications),
+            kept_count,
             missing_date_count
         )
-        return publications
+        return publications, missing_date_count
 
     except requests.exceptions.Timeout:
         logger.error(
@@ -413,13 +473,13 @@ def _fetch_pubmed_source(
             source_name,
             REQUEST_TIMEOUT
         )
-        return []
+        return [], 0
     except requests.exceptions.RequestException as e:
         logger.error("Source '%s': PubMed API request failed: %s", source_name, e)
-        return []
+        return [], 0
     except Exception as e:
         logger.error("Source '%s': unexpected error: %s", source_name, e)
-        return []
+        return [], 0
 
 
 def fetch_publications(
@@ -459,7 +519,7 @@ def fetch_publications(
                 "kept": len(publications),
             })
         elif source_type == "pubmed":
-            publications = _fetch_pubmed_source(source, since_date, run_id)
+            publications, missing_dates = _fetch_pubmed_source(source, since_date, run_id)
             all_publications.extend(publications)
             source_stats.append({
                 "name": source_name,
@@ -467,6 +527,7 @@ def fetch_publications(
                 "query": source.get("query", ""),
                 "retmax": source.get("retmax", 200),
                 "kept": len(publications),
+                "missing_date_count": missing_dates,
             })
         else:
             logger.warning(
