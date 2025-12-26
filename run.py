@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import yaml
 
+from diff.dedupe import deduplicate_publications
 from diff.detect_changes import detect_changes
 from enrich.commercial import enrich_publication_commercial
 from ingest.fetch import fetch_publications
@@ -107,6 +108,7 @@ def generate_manifest(
     count_new: int,
     count_total: int,
     outdir: Path,
+    dedupe_stats: dict = None,
 ) -> None:
     """Generate and save run manifest for provenance.
 
@@ -120,6 +122,7 @@ def generate_manifest(
         count_new: Count of new publications
         count_total: Total count of publications
         outdir: Output directory
+        dedupe_stats: Optional deduplication statistics
     """
     # Compute config file hash
     config_hash = compute_file_hash(config_path)
@@ -151,6 +154,14 @@ def generate_manifest(
             "latest_manifest_json": "data/output/latest_manifest.json",
         },
     }
+
+    # Add deduplication stats if available
+    if dedupe_stats:
+        manifest["deduplication"] = {
+            "total_fetched_raw": dedupe_stats["total_input"],
+            "deduped_total": dedupe_stats["total_output"],
+            "duplicates_merged": dedupe_stats["duplicates_merged"],
+        }
 
     # Save manifest
     output_dir = outdir / "output"
@@ -316,6 +327,16 @@ def main() -> None:
             json.dump(publications_data, f, indent=2)
         logger.info("Saved raw publications to %s", raw_output_path)
 
+    # Phase 1.5: Deduplicate across sources
+    logger.info("Phase 1.5: Deduplicating publications across sources")
+    publications, dedupe_stats = deduplicate_publications(publications)
+    logger.info(
+        "Deduplication: %d → %d publications (%d duplicates merged)",
+        dedupe_stats["total_input"],
+        dedupe_stats["total_output"],
+        dedupe_stats["duplicates_merged"]
+    )
+
     # Phase 2: Detect changes
     logger.info("Phase 2: Detecting changes")
     snapshot_dir = str(outdir / "snapshots")
@@ -473,6 +494,7 @@ def main() -> None:
         count_new=changes["count_new"],
         count_total=changes["count_total"],
         outdir=outdir,
+        dedupe_stats=dedupe_stats,
     )
 
     # Phase 6: Create latest pointers

@@ -117,6 +117,7 @@ def detect_changes(
             "title": pub.title,
             "authors": pub.authors,
             "source": pub.source,
+            "source_names": getattr(pub, "source_names", [pub.source]),
             "date": pub.date,
             "url": pub.url,
             "raw_text": pub.raw_text,

@@ -1,7 +1,7 @@
 pyyaml>=6.0
-requests>=2.31.0
+requests>=2.31.0,<2.32  # Constrain to avoid urllib3 v2
 feedparser>=6.0.10
 openai>=1.0.0
 python-dateutil>=2.8.0
-urllib3<2  # Pin for macOS LibreSSL compatibility
+urllib3>=1.26.0,<2  # Pin for macOS LibreSSL compatibility
 pytest>=7.0.0

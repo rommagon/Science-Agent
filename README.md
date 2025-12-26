@@ -190,6 +190,24 @@ The test suite covers:
 - **Commercial Signals** (`test_commercial.py`): Valid schema returned for all inputs including empty
 - **PubMed Date Parsing** (`test_pubmed_dates.py`): Handles YYYY, YYYY Mon, YYYY Mon DD, YYYY Mon-Mon, and seasonal dates (Winter, Spring, Summer, Fall)
 
+## Troubleshooting
+
+### urllib3 LibreSSL Warning
+
+If you see warnings about `urllib3 v2` and `LibreSSL` compatibility:
+
+```bash
+# Check your urllib3 version
+python -c "import urllib3; print(urllib3.__version__)"
+```
+
+The version should be `1.x`. If it shows `2.x`:
+
+1. Delete and recreate your virtual environment
+2. Reinstall dependencies: `pip install -r requirements.txt`
+
+The requirements.txt pins `urllib3<2` and `requests<2.32` to maintain compatibility with macOS LibreSSL.
+
 ## Development Status
 
 This is V1 - a focused implementation with core functionality: ingestion, summarization, change detection, commercial enrichment, and reporting.

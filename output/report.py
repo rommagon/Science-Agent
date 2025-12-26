@@ -163,6 +163,15 @@ def generate_report(
                     f.write(f"- **{title}**\n")
 
                 f.write(f"  - Source: {source}\n")
+
+                # Show "Also seen in" if publication appeared in multiple sources
+                source_names = pub.get("source_names", [])
+                if source_names and len(source_names) > 1:
+                    # Filter out the primary source to show only additional sources
+                    additional_sources = [s for s in source_names if s != source]
+                    if additional_sources:
+                        f.write(f"  - Also seen in: {', '.join(additional_sources)}\n")
+
                 f.write(f"  - Date: {date}\n")
 
                 # Add commercial signal if detected
@@ -272,6 +281,7 @@ def export_new_to_csv(
             "id",
             "title",
             "source",
+            "source_names",
             "date",
             "url",
             "one_liner",
@@ -287,11 +297,13 @@ def export_new_to_csv(
             # Join sponsor and company names with semicolons
             sponsor_names = ";".join(pub.get("sponsor_names", []))
             company_names = ";".join(pub.get("company_names", []))
+            source_names = ";".join(pub.get("source_names", []))
 
             writer.writerow({
                 "id": pub.get("id", ""),
                 "title": pub.get("title", ""),
                 "source": pub.get("source", ""),
+                "source_names": source_names,
                 "date": pub.get("date", ""),
                 "url": pub.get("url", ""),
                 "one_liner": pub.get("one_liner", ""),
