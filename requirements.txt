@@ -4,3 +4,4 @@ feedparser>=6.0.10
 openai>=1.0.0
 python-dateutil>=2.8.0
 urllib3<2  # Pin for macOS LibreSSL compatibility
+pytest>=7.0.0

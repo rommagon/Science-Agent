@@ -151,6 +151,35 @@ After every successful run (local or automated), the following "latest" pointer 
 
 These files make it easy to access the most recent results without knowing the specific run ID.
 
+## Testing
+
+### Running Tests
+
+The project includes a minimal regression test suite using pytest:
+
+```bash
+pytest
+```
+
+Run with verbose output:
+```bash
+pytest -v
+```
+
+Run specific test file:
+```bash
+pytest tests/test_compute_id.py
+```
+
+### Test Coverage
+
+The test suite covers:
+- **ID Generation** (`test_compute_id.py`): Deterministic publication ID generation
+- **Change Detection** (`test_snapshot_diff.py`): First run all NEW, subsequent runs detect UNCHANGED
+- **Report Generation** (`test_report_generation.py`): Report file creation and count accuracy
+- **Commercial Signals** (`test_commercial.py`): Valid schema returned for all inputs including empty
+- **PubMed Date Parsing** (`test_pubmed_dates.py`): Handles YYYY, YYYY Mon, YYYY Mon DD, YYYY Mon-Mon, and seasonal dates (Winter, Spring, Summer, Fall)
+
 ## Development Status
 
-This is the initial scaffold. Core functionality (fetching, summarization, change detection, reporting) is currently stubbed and will be implemented in future iterations.
+This is V1 - a focused implementation with core functionality: ingestion, summarization, change detection, commercial enrichment, and reporting.
