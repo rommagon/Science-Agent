@@ -1,6 +1,7 @@
 """Fetch publications from configured sources."""
 
 import logging
+import re
 import time
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -22,6 +23,31 @@ MAX_REDIRECTS = 5
 PUBMED_ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 PUBMED_ESUMMARY_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 PUBMED_POLITENESS_DELAY = 0.34  # seconds between API calls
+
+
+def _strip_html_tags(text: str) -> str:
+    """Strip HTML tags from text safely.
+
+    Args:
+        text: Text potentially containing HTML tags
+
+    Returns:
+        Text with HTML tags removed
+    """
+    if not text:
+        return ""
+    # Remove HTML tags using regex
+    clean_text = re.sub(r'<[^>]+>', '', text)
+    # Decode common HTML entities
+    clean_text = clean_text.replace('&nbsp;', ' ')
+    clean_text = clean_text.replace('&amp;', '&')
+    clean_text = clean_text.replace('&lt;', '<')
+    clean_text = clean_text.replace('&gt;', '>')
+    clean_text = clean_text.replace('&quot;', '"')
+    clean_text = clean_text.replace('&#39;', "'")
+    # Clean up extra whitespace
+    clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+    return clean_text
 
 
 def _parse_rss_date(date_str: str = None, time_struct: time.struct_time = None) -> Optional[datetime]:
@@ -72,7 +98,7 @@ def _parse_rss_date(date_str: str = None, time_struct: time.struct_time = None) 
 
 def _fetch_rss_source(
     source: dict, since_date: datetime, run_id: str
-) -> list[Publication]:
+) -> tuple[list[Publication], int]:
     """Fetch publications from a single RSS source.
 
     Args:
@@ -81,14 +107,14 @@ def _fetch_rss_source(
         run_id: Unique identifier for this run
 
     Returns:
-        List of Publication objects from this source
+        Tuple of (List of Publication objects, missing_date_count)
     """
     source_name = source.get("name", "Unknown")
     url = source.get("url")
 
     if not url:
         logger.error("Source '%s' has no URL configured", source_name)
-        return []
+        return [], 0
 
     try:
         logger.info("Fetching RSS feed: %s from %s", source_name, url)
@@ -123,7 +149,7 @@ def _fetch_rss_source(
         if feed.bozo and not feed.entries:
             error_msg = str(feed.get("bozo_exception", "Unknown error"))
             logger.error("Failed to parse RSS feed '%s': %s", source_name, error_msg)
-            return []
+            return [], 0
 
         publications = []
         fetched_count = 0
@@ -157,19 +183,37 @@ def _fetch_rss_source(
             title = entry.get("title", "Untitled")
             entry_url = entry.get("link", "")
 
-            # Extract authors
+            # Extract authors with fallbacks (check multiple fields)
             authors = []
-            if "authors" in entry:
+            if "authors" in entry and entry.authors:
+                # feedparser's authors is a list of dicts with 'name' key
                 authors = [author.get("name", "") for author in entry.authors if author.get("name")]
-            elif "author" in entry:
+            elif "author" in entry and entry.author:
+                # Plain author string
                 authors = [entry.author]
+            elif hasattr(entry, 'dc_creator') and entry.dc_creator:
+                # Dublin Core creator field (common in some RSS feeds)
+                authors = [entry.dc_creator] if isinstance(entry.dc_creator, str) else entry.dc_creator
+            elif "creator" in entry and entry.creator:
+                # Generic creator field
+                authors = [entry.creator] if isinstance(entry.creator, str) else entry.creator
 
-            # Extract raw text (prefer summary, fallback to description)
+            # Extract raw text (prefer summary, fallback to description) and strip HTML
             raw_text = ""
-            if "summary" in entry:
-                raw_text = entry.summary
-            elif "description" in entry:
-                raw_text = entry.description
+            if "summary" in entry and entry.summary:
+                raw_text = _strip_html_tags(entry.summary)
+            elif "description" in entry and entry.description:
+                raw_text = _strip_html_tags(entry.description)
+
+            # Detect venue from feed metadata or entry
+            venue = ""
+            # Try to extract venue from feed title
+            feed_title = feed.feed.get("title", "")
+            if "biorxiv" in feed_title.lower() or "biorxiv" in url.lower():
+                venue = "bioRxiv"
+            elif "medrxiv" in feed_title.lower() or "medrxiv" in url.lower():
+                venue = "medRxiv"
+            # Could also check entry.get("prism_publicationname") or similar fields if available
 
             # Create Publication object
             pub_id = compute_id(title, source_name, entry_url)
@@ -183,6 +227,7 @@ def _fetch_rss_source(
                 raw_text=raw_text,
                 summary="",  # Will be filled by summarization step
                 run_id=run_id,
+                venue=venue,
             )
             publications.append(publication)
 
@@ -193,7 +238,7 @@ def _fetch_rss_source(
             len(publications),
             missing_date_count
         )
-        return publications
+        return publications, missing_date_count
 
     except requests.exceptions.TooManyRedirects:
         logger.error(
@@ -201,20 +246,20 @@ def _fetch_rss_source(
             source_name,
             MAX_REDIRECTS
         )
-        return []
+        return [], 0
     except requests.exceptions.Timeout:
         logger.error(
             "Source '%s': request timed out after %ds",
             source_name,
             REQUEST_TIMEOUT
         )
-        return []
+        return [], 0
     except requests.exceptions.RequestException as e:
         logger.error("Source '%s': HTTP request failed: %s", source_name, e)
-        return []
+        return [], 0
     except Exception as e:
         logger.error("Source '%s': unexpected error: %s", source_name, e)
-        return []
+        return [], 0
 
 
 def _parse_pubmed_date(date_str: str) -> tuple[Optional[datetime], bool]:
@@ -510,13 +555,14 @@ def fetch_publications(
         source_name = source.get("name", "Unknown")
 
         if source_type == "rss":
-            publications = _fetch_rss_source(source, since_date, run_id)
+            publications, missing_dates = _fetch_rss_source(source, since_date, run_id)
             all_publications.extend(publications)
             source_stats.append({
                 "name": source_name,
                 "type": source_type,
                 "url": source.get("url", ""),
                 "kept": len(publications),
+                "missing_date_count": missing_dates,
             })
         elif source_type == "pubmed":
             publications, missing_dates = _fetch_pubmed_source(source, since_date, run_id)

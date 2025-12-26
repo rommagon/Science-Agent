@@ -19,6 +19,14 @@ sources:
     type: rss
     url: https://www.science.org/rss/news_current.xml
 
+  - name: bioRxiv (all)
+    type: rss
+    url: https://connect.biorxiv.org/biorxiv_xml.php?subject=all
+
+  - name: medRxiv (all)
+    type: rss
+    url: https://connect.medrxiv.org/medrxiv_xml.php?subject=all
+
   # PubMed E-utilities sources
   - name: PubMed - cancer (broad)
     type: pubmed

@@ -17,6 +17,7 @@ class Publication:
     raw_text: str
     summary: str
     run_id: str
+    venue: str = ""  # Journal/venue name (e.g., "bioRxiv", "medRxiv")
 
 
 def compute_id(title: str, source: str, url: str) -> str:

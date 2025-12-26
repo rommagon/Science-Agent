@@ -122,6 +122,7 @@ def detect_changes(
             "raw_text": pub.raw_text,
             "summary": pub.summary,
             "run_id": pub.run_id,
+            "venue": pub.venue,
             "status": status,
         }
         all_with_status.append(pub_dict)
