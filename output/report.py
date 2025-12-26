@@ -53,7 +53,17 @@ def generate_report(
     unchanged_pubs.sort(key=lambda p: p.get("date", ""), reverse=True)
 
     # Apply max_items_per_source limit if specified
+    # Track overflow counts for display
+    new_overflow = {}
+    unchanged_overflow = {}
+
     if max_items_per_source:
+        # Count total items per source for NEW
+        new_source_totals = {}
+        for pub in new_pubs:
+            source = pub.get("source", "Unknown")
+            new_source_totals[source] = new_source_totals.get(source, 0) + 1
+
         # Limit new publications per source
         limited_new_pubs = []
         source_counts = {}
@@ -63,7 +73,19 @@ def generate_report(
             if count < max_items_per_source:
                 limited_new_pubs.append(pub)
                 source_counts[source] = count + 1
+
+        # Calculate overflow for each source
+        for source, total in new_source_totals.items():
+            if total > max_items_per_source:
+                new_overflow[source] = total - max_items_per_source
+
         new_pubs = limited_new_pubs
+
+        # Count total items per source for UNCHANGED
+        unchanged_source_totals = {}
+        for pub in unchanged_pubs:
+            source = pub.get("source", "Unknown")
+            unchanged_source_totals[source] = unchanged_source_totals.get(source, 0) + 1
 
         # Limit unchanged publications per source
         limited_unchanged_pubs = []
@@ -74,9 +96,22 @@ def generate_report(
             if count < max_items_per_source:
                 limited_unchanged_pubs.append(pub)
                 source_counts[source] = count + 1
+
+        # Calculate overflow for each source
+        for source, total in unchanged_source_totals.items():
+            if total > max_items_per_source:
+                unchanged_overflow[source] = total - max_items_per_source
+
         unchanged_pubs = limited_unchanged_pubs
 
-        logger.info("Applied max_items_per_source=%d limit to report", max_items_per_source)
+        total_new_hidden = sum(new_overflow.values())
+        total_unchanged_hidden = sum(unchanged_overflow.values())
+        logger.info(
+            "Applied max_items_per_source=%d limit to report (hidden: %d new, %d unchanged)",
+            max_items_per_source,
+            total_new_hidden,
+            total_unchanged_hidden,
+        )
 
     # Create output directory
     output_dir = Path(outdir) / "output"
@@ -98,6 +133,10 @@ def generate_report(
         if count_new == 0:
             f.write("No new publications detected in this run.\n\n")
         else:
+            # Group publications by source to track when to show overflow
+            current_source = None
+            source_item_count = 0
+
             for pub in new_pubs:
                 title = pub.get("title", "Untitled")
                 url = pub.get("url", "")
@@ -105,6 +144,16 @@ def generate_report(
                 date = pub.get("date", "Unknown date")
                 one_liner = pub.get("one_liner", "")
                 essence_bullets = pub.get("essence_bullets", [])
+
+                # If we switched sources and there was overflow, show it
+                if current_source and source != current_source:
+                    if current_source in new_overflow:
+                        overflow_count = new_overflow[current_source]
+                        f.write(f"  *+ {overflow_count} more NEW items from {current_source} not shown (stored in changes JSON)*\n\n")
+                    source_item_count = 0
+
+                current_source = source
+                source_item_count += 1
 
                 # Format as Markdown link if URL exists
                 if url:
@@ -127,6 +176,11 @@ def generate_report(
 
                 f.write("\n")
 
+            # Show overflow for the last source if needed
+            if current_source and current_source in new_overflow:
+                overflow_count = new_overflow[current_source]
+                f.write(f"  *+ {overflow_count} more NEW items from {current_source} not shown (stored in changes JSON)*\n\n")
+
         # Unchanged publications section
         unchanged_count = count_total - count_new
         f.write(f"## 📁 Unchanged ({unchanged_count})\n\n")
@@ -134,11 +188,31 @@ def generate_report(
         if unchanged_count == 0:
             f.write("No unchanged publications.\n\n")
         else:
+            # Group publications by source to track when to show overflow
+            current_source = None
+            source_item_count = 0
+
             for pub in unchanged_pubs:
                 title = pub.get("title", "Untitled")
                 source = pub.get("source", "Unknown")
                 date = pub.get("date", "Unknown date")
+
+                # If we switched sources and there was overflow, show it
+                if current_source and source != current_source:
+                    if current_source in unchanged_overflow:
+                        overflow_count = unchanged_overflow[current_source]
+                        f.write(f"  *+ {overflow_count} more UNCHANGED items from {current_source} not shown (stored in changes JSON)*\n\n")
+                    source_item_count = 0
+
+                current_source = source
+                source_item_count += 1
+
                 f.write(f"- {title} – {source} – {date}\n")
+
+            # Show overflow for the last source if needed
+            if current_source and current_source in unchanged_overflow:
+                overflow_count = unchanged_overflow[current_source]
+                f.write(f"\n  *+ {overflow_count} more UNCHANGED items from {current_source} not shown (stored in changes JSON)*\n")
 
     logger.info("Markdown report saved to %s", report_path)
     print(f"Report saved: {report_path}")
