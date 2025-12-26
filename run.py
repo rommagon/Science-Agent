@@ -14,6 +14,7 @@ from uuid import uuid4
 import yaml
 
 from diff.detect_changes import detect_changes
+from enrich.commercial import enrich_publication_commercial
 from ingest.fetch import fetch_publications
 from output.report import generate_report
 from summarize.summarize import summarize_publications
@@ -286,7 +287,30 @@ def main() -> None:
             pub_dict["essence_bullets"] = summaries[pub_dict["id"]].get("essence_bullets", [])
             pub_dict["one_liner"] = summaries[pub_dict["id"]].get("one_liner", "")
 
-    # Save changes output with status and summaries
+    # Phase 3.5: Enrich NEW publications with commercial signals
+    logger.info("Phase 3.5: Enriching NEW publications with commercial signals")
+    commercial_signals_count = 0
+    for pub_dict in changes["all_with_status"]:
+        if pub_dict.get("status") == "NEW":
+            # Enrich with commercial signals (uses cache if available)
+            commercial = enrich_publication_commercial(
+                publication_id=pub_dict["id"],
+                text=pub_dict.get("raw_text", ""),
+                cache_dir=summary_dir,
+            )
+            # Add commercial fields to publication
+            pub_dict["has_sponsor_signal"] = commercial["has_sponsor_signal"]
+            pub_dict["sponsor_names"] = commercial["sponsor_names"]
+            pub_dict["company_affiliation_signal"] = commercial["company_affiliation_signal"]
+            pub_dict["company_names"] = commercial["company_names"]
+            pub_dict["evidence_snippets"] = commercial["evidence_snippets"]
+
+            if commercial["has_sponsor_signal"] or commercial["company_affiliation_signal"]:
+                commercial_signals_count += 1
+
+    logger.info("Commercial signals detected in %d publications", commercial_signals_count)
+
+    # Save changes output with status, summaries, and commercial signals
     if publications:
         changes_output_path = outdir / "raw" / f"{run_id}_changes.json"
         changes_output = {

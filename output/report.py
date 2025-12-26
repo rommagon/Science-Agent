@@ -164,6 +164,19 @@ def generate_report(
                 f.write(f"  - Source: {source}\n")
                 f.write(f"  - Date: {date}\n")
 
+                # Add commercial signal if detected
+                has_sponsor = pub.get("has_sponsor_signal", False)
+                has_company = pub.get("company_affiliation_signal", False)
+                if has_sponsor or has_company:
+                    all_names = []
+                    if has_sponsor:
+                        all_names.extend(pub.get("sponsor_names", []))
+                    if has_company:
+                        all_names.extend(pub.get("company_names", []))
+                    if all_names:
+                        names_str = ", ".join(all_names)
+                        f.write(f"  - Commercial signal detected: {names_str}\n")
+
                 # Add one-liner if available
                 if one_liner:
                     f.write(f"  - *{one_liner}*\n")
