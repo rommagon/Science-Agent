@@ -2,8 +2,19 @@
 
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Optional
+
+# Fix for Python 3.9: google-api-core tries to use importlib.metadata.packages_distributions()
+# which doesn't exist in Python 3.9. We use the importlib-metadata backport instead.
+try:
+    import importlib_metadata
+    # Replace the standard library's importlib.metadata with the backport
+    sys.modules['importlib.metadata'] = importlib_metadata
+except ImportError:
+    # Python 3.10+ doesn't need the backport
+    pass
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
