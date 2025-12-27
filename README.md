@@ -161,6 +161,101 @@ After every successful run (local or automated), the following "latest" pointer 
 
 These files make it easy to access the most recent results without knowing the specific run ID.
 
+## Google Drive Upload (Optional)
+
+You can automatically upload the latest output files to a Google Drive folder by using the `--upload-drive` flag.
+
+### Setup
+
+#### 1. Create a Google Cloud Service Account
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create or select a project
+3. Enable the Google Drive API:
+   - Navigate to "APIs & Services" > "Library"
+   - Search for "Google Drive API"
+   - Click "Enable"
+4. Create a service account:
+   - Navigate to "APIs & Services" > "Credentials"
+   - Click "Create Credentials" > "Service Account"
+   - Give it a name (e.g., "acitrack-uploader")
+   - Click "Create and Continue"
+   - Skip granting roles (click "Continue")
+   - Click "Done"
+5. Create and download a JSON key:
+   - Click on the newly created service account
+   - Go to the "Keys" tab
+   - Click "Add Key" > "Create new key"
+   - Choose "JSON" format
+   - Click "Create" - the key file will be downloaded
+
+#### 2. Share Your Google Drive Folder
+
+1. Create or navigate to the Google Drive folder where you want to upload files
+2. Get the folder ID from the URL:
+   - Example URL: `https://drive.google.com/drive/folders/1a2b3c4d5e6f7g8h9i0j`
+   - Folder ID: `1a2b3c4d5e6f7g8h9i0j`
+3. Share the folder with the service account:
+   - Click "Share" on the folder
+   - Add the service account email (found in your JSON key file, looks like `acitrack-uploader@your-project.iam.gserviceaccount.com`)
+   - Give it "Editor" permissions
+   - Click "Share"
+
+**For Shared Drives (Team Drives):**
+- The service account must be added as a member of the Shared Drive with "Content Manager" or "Manager" permissions
+
+#### 3. Set Environment Variables
+
+```bash
+# Path to your service account JSON key file
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your-service-account-key.json"
+
+# Google Drive folder ID where files will be uploaded
+export ACITRACK_DRIVE_FOLDER_ID="1a2b3c4d5e6f7g8h9i0j"
+```
+
+Add these to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to make them permanent.
+
+### Usage
+
+Run with the `--upload-drive` flag to upload the latest outputs to Google Drive:
+
+```bash
+python run.py --since-days 7 --max-items-per-source 5 --upload-drive
+```
+
+This will upload three files to your configured Drive folder:
+- `latest_report.md` - Full markdown report
+- `latest_new.csv` - CSV export of new publications
+- `latest_manifest.json` - Run provenance manifest
+
+If files with the same names already exist in the folder, they will be updated (not duplicated).
+
+### Verification
+
+When you run with `--upload-drive`, the service account email will be printed:
+
+```
+📧 Service account: acitrack-uploader@your-project.iam.gserviceaccount.com
+```
+
+This helps verify you're using the correct credentials. After upload, you'll see links to the files in Google Drive.
+
+### Troubleshooting
+
+**"GOOGLE_APPLICATION_CREDENTIALS environment variable not set"**
+- Make sure you've exported the environment variable in your current shell session
+
+**"ACITRACK_DRIVE_FOLDER_ID environment variable not set"**
+- Make sure you've exported the folder ID environment variable
+
+**"Permission denied" or "404 not found"**
+- Verify the service account email has been shared with the folder
+- For Shared Drives, ensure the service account is a member of the Shared Drive
+
+**"File not found" errors**
+- The latest pointer files must exist before upload. Run the pipeline at least once without `--upload-drive` first.
+
 ## Testing
 
 ### Running Tests

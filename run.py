@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import shutil
 import sys
 from dataclasses import asdict
@@ -235,6 +236,11 @@ def main() -> None:
         type=str,
         default="data",
         help="Output directory for data (default: data)",
+    )
+    parser.add_argument(
+        "--upload-drive",
+        action="store_true",
+        help="Upload latest outputs to Google Drive (requires GOOGLE_APPLICATION_CREDENTIALS and ACITRACK_DRIVE_FOLDER_ID env vars)",
     )
 
     args = parser.parse_args()
@@ -501,6 +507,43 @@ def main() -> None:
     logger.info("Phase 6: Creating latest pointers")
     create_latest_pointers(run_id, outdir)
 
+    # Phase 7 (optional): Upload to Google Drive
+    drive_upload_success = True
+    if args.upload_drive:
+        logger.info("Phase 7: Uploading latest outputs to Google Drive")
+
+        # Check required env vars
+        folder_id = os.environ.get("ACITRACK_DRIVE_FOLDER_ID")
+        creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+
+        if not folder_id:
+            logger.error("ACITRACK_DRIVE_FOLDER_ID environment variable not set")
+            print("\n❌ ERROR: ACITRACK_DRIVE_FOLDER_ID environment variable not set")
+            print("Please set it to your Google Drive folder ID and try again.\n")
+            sys.exit(1)
+
+        if not creds_path:
+            logger.error("GOOGLE_APPLICATION_CREDENTIALS environment variable not set")
+            print("\n❌ ERROR: GOOGLE_APPLICATION_CREDENTIALS environment variable not set")
+            print("Please set it to the path of your service account JSON key file.\n")
+            sys.exit(1)
+
+        try:
+            from integrations.drive_upload import upload_latest_outputs
+
+            results = upload_latest_outputs(folder_id, str(outdir))
+
+            if results.get("_has_failures"):
+                drive_upload_success = False
+                logger.error("Some files failed to upload to Google Drive")
+            else:
+                logger.info("All files uploaded to Google Drive successfully")
+
+        except Exception as e:
+            logger.error("Google Drive upload failed: %s", e)
+            print(f"\n❌ ERROR: Google Drive upload failed: {e}\n")
+            drive_upload_success = False
+
     # Summary
     print("\n" + "=" * 70)
     print("Run Summary")
@@ -511,6 +554,11 @@ def main() -> None:
     print("=" * 70 + "\n")
 
     logger.info("Run completed successfully")
+
+    # Exit with error code if Drive upload failed
+    if args.upload_drive and not drive_upload_success:
+        logger.error("Exiting with error due to Drive upload failures")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
