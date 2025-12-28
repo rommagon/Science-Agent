@@ -20,7 +20,7 @@ from diff.detect_changes import detect_changes
 from enrich.commercial import enrich_publication_commercial
 from ingest.fetch import fetch_publications
 from output.report import export_new_to_csv, generate_report
-from storage.sqlite_store import store_publications
+from storage.sqlite_store import store_publications, store_run_history
 from summarize.summarize import summarize_publications
 
 # Configure logging
@@ -250,8 +250,9 @@ def main() -> None:
     if len(sys.argv) == 1:
         print("\nDemo mode: python run.py --reset-snapshot --since-days 7 --max-items-per-source 5\n")
 
-    # Generate unique run ID
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
+    # Generate unique run ID and track start time
+    run_start_time = datetime.now()
+    run_id = run_start_time.strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
 
     # Calculate cutoff date - --since-date overrides --since-days
     if args.since_date:
@@ -556,6 +557,39 @@ def main() -> None:
             logger.error("Google Drive upload failed: %s", e)
             print(f"\n❌ ERROR: Google Drive upload failed: {e}\n")
             drive_upload_success = False
+
+    # Phase 7.5: Store run history (additive, non-blocking)
+    logger.info("Phase 7.5: Storing run history to database")
+
+    # Calculate summarized count (publications with summaries)
+    summarized_count = len([p for p in changes["all_with_status"]
+                           if p.get("one_liner") and p.get("one_liner") != "Summary skipped due to cap."])
+
+    run_history_result = store_run_history(
+        run_id=run_id,
+        started_at=run_start_time.isoformat(),
+        since_timestamp=since_date.isoformat(),
+        max_items_per_source=args.max_items_per_source if args.max_items_per_source else 0,
+        sources_count=len(sources),
+        total_fetched=dedupe_stats["total_input"],
+        total_deduped=dedupe_stats["total_output"],
+        new_count=changes["count_new"],
+        unchanged_count=changes["count_total"] - changes["count_new"],
+        summarized_count=summarized_count,
+        upload_drive=args.upload_drive,
+        publications_with_status=changes["all_with_status"]
+    )
+
+    if run_history_result["success"]:
+        logger.info(
+            "Run history stored: %d publications tracked",
+            run_history_result["pub_runs_inserted"]
+        )
+    else:
+        logger.warning(
+            "Run history storage failed: %s (continuing)",
+            run_history_result["error"]
+        )
 
     # Summary
     print("\n" + "=" * 70)

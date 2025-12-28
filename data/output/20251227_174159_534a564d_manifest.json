@@ -1,0 +1,245 @@
+{
+  "run_id": "20251227_174159_534a564d",
+  "timestamp": "2025-12-27T17:42:39.249064",
+  "since_date": "2025-12-20",
+  "config": {
+    "path": "config/sources.yaml",
+    "sha256": "cf44ac8aa20d5e66da4ec462e081821228fb0d32d48b6036c94a754a215b7d7f"
+  },
+  "active_sources": [
+    "Nature Cancer",
+    "Science News",
+    "bioRxiv (all)",
+    "medRxiv (all)",
+    "PubMed - cancer (broad)",
+    "Journal of the American Osteopathic Association",
+    "PLoS One",
+    "European Journal of Cardio-Thoracic Surgery",
+    "Israel Medical Association Journal",
+    "The Journal of Urology",
+    "BMC Cancer",
+    "Interactive Cardiovascular and Thoracic Surgery",
+    "European Respiratory Journal",
+    "European Urology",
+    "Gut",
+    "Journal of Veterinary Behavior",
+    "Integrative Cancer Therapies",
+    "British Medical Journal",
+    "Applied Animal Behaviour Science",
+    "The Lancet",
+    "Frontiers in Veterinary Science",
+    "Biology",
+    "Acta Oncologica",
+    "BMC Urology"
+  ],
+  "source_details": [
+    {
+      "name": "Nature Cancer",
+      "type": "rss",
+      "url": "https://www.nature.com/natcancer.rss",
+      "kept": 1,
+      "missing_date_count": 0
+    },
+    {
+      "name": "Science News",
+      "type": "rss",
+      "url": "https://www.science.org/rss/news_current.xml",
+      "kept": 10,
+      "missing_date_count": 0
+    },
+    {
+      "name": "bioRxiv (all)",
+      "type": "rss",
+      "url": "https://connect.biorxiv.org/biorxiv_xml.php?subject=all",
+      "kept": 30,
+      "missing_date_count": 0
+    },
+    {
+      "name": "medRxiv (all)",
+      "type": "rss",
+      "url": "https://connect.medrxiv.org/medrxiv_xml.php?subject=all",
+      "kept": 30,
+      "missing_date_count": 0
+    },
+    {
+      "name": "PubMed - cancer (broad)",
+      "type": "pubmed",
+      "query": "cancer",
+      "retmax": 200,
+      "kept": 200,
+      "missing_date_count": 0
+    },
+    {
+      "name": "Journal of the American Osteopathic Association",
+      "type": "pubmed",
+      "query": "journal:\"Journal of the American Osteopathic Association\"",
+      "retmax": 200,
+      "kept": 0,
+      "missing_date_count": 0
+    },
+    {
+      "name": "PLoS One",
+      "type": "pubmed",
+      "query": "journal:\"PLoS One\"",
+      "retmax": 200,
+      "kept": 7,
+      "missing_date_count": 0
+    },
+    {
+      "name": "European Journal of Cardio-Thoracic Surgery",
+      "type": "pubmed",
+      "query": "journal:\"European Journal of Cardio-Thoracic Surgery\"",
+      "retmax": 200,
+      "kept": 11,
+      "missing_date_count": 0
+    },
+    {
+      "name": "Israel Medical Association Journal",
+      "type": "pubmed",
+      "query": "journal:\"Israel Medical Association Journal\"",
+      "retmax": 200,
+      "kept": 0,
+      "missing_date_count": 0
+    },
+    {
+      "name": "The Journal of Urology",
+      "type": "pubmed",
+      "query": "journal:\"The Journal of Urology\"",
+      "retmax": 200,
+      "kept": 11,
+      "missing_date_count": 0
+    },
+    {
+      "name": "BMC Cancer",
+      "type": "pubmed",
+      "query": "journal:\"BMC Cancer\"",
+      "retmax": 200,
+      "kept": 92,
+      "missing_date_count": 0
+    },
+    {
+      "name": "Interactive Cardiovascular and Thoracic Surgery",
+      "type": "pubmed",
+      "query": "journal:\"Interactive Cardiovascular and Thoracic Surgery\"",
+      "retmax": 200,
+      "kept": 0,
+      "missing_date_count": 0
+    },
+    {
+      "name": "European Respiratory Journal",
+      "type": "pubmed",
+      "query": "journal:\"European Respiratory Journal\"",
+      "retmax": 200,
+      "kept": 9,
+      "missing_date_count": 0
+    },
+    {
+      "name": "European Urology",
+      "type": "pubmed",
+      "query": "journal:\"European Urology\"",
+      "retmax": 200,
+      "kept": 9,
+      "missing_date_count": 0
+    },
+    {
+      "name": "Gut",
+      "type": "pubmed",
+      "query": "journal:\"Gut\"",
+      "retmax": 200,
+      "kept": 187,
+      "missing_date_count": 0
+    },
+    {
+      "name": "Journal of Veterinary Behavior",
+      "type": "pubmed",
+      "query": "journal:\"Journal of Veterinary Behavior\"",
+      "retmax": 200,
+      "kept": 0,
+      "missing_date_count": 0
+    },
+    {
+      "name": "Integrative Cancer Therapies",
+      "type": "pubmed",
+      "query": "journal:\"Integrative Cancer Therapies\"",
+      "retmax": 200,
+      "kept": 5,
+      "missing_date_count": 0
+    },
+    {
+      "name": "British Medical Journal",
+      "type": "pubmed",
+      "query": "journal:\"British Medical Journal\"",
+      "retmax": 200,
+      "kept": 75,
+      "missing_date_count": 0
+    },
+    {
+      "name": "Applied Animal Behaviour Science",
+      "type": "pubmed",
+      "query": "journal:\"Applied Animal Behaviour Science\"",
+      "retmax": 200,
+      "kept": 2,
+      "missing_date_count": 0
+    },
+    {
+      "name": "The Lancet",
+      "type": "pubmed",
+      "query": "journal:\"The Lancet\"",
+      "retmax": 200,
+      "kept": 16,
+      "missing_date_count": 0
+    },
+    {
+      "name": "Frontiers in Veterinary Science",
+      "type": "pubmed",
+      "query": "journal:\"Frontiers in Veterinary Science\"",
+      "retmax": 200,
+      "kept": 0,
+      "missing_date_count": 0
+    },
+    {
+      "name": "Biology",
+      "type": "pubmed",
+      "query": "journal:\"Biology\"",
+      "retmax": 200,
+      "kept": 192,
+      "missing_date_count": 0
+    },
+    {
+      "name": "Acta Oncologica",
+      "type": "pubmed",
+      "query": "journal:\"Acta Oncologica\"",
+      "retmax": 200,
+      "kept": 0,
+      "missing_date_count": 0
+    },
+    {
+      "name": "BMC Urology",
+      "type": "pubmed",
+      "query": "journal:\"BMC Urology\"",
+      "retmax": 200,
+      "kept": 16,
+      "missing_date_count": 0
+    }
+  ],
+  "counts": {
+    "total_fetched": 840,
+    "total_new": 0,
+    "total_unchanged": 840
+  },
+  "outputs": {
+    "publications_json": "data/raw/20251227_174159_534a564d_publications.json",
+    "changes_json": "data/raw/20251227_174159_534a564d_changes.json",
+    "report_md": "data/output/20251227_174159_534a564d_report.md",
+    "new_csv": "data/output/20251227_174159_534a564d_new.csv",
+    "manifest_json": "data/output/20251227_174159_534a564d_manifest.json",
+    "latest_report_md": "data/output/latest_report.md",
+    "latest_new_csv": "data/output/latest_new.csv",
+    "latest_manifest_json": "data/output/latest_manifest.json"
+  },
+  "deduplication": {
+    "total_fetched_raw": 903,
+    "deduped_total": 840,
+    "duplicates_merged": 63
+  }
+}
