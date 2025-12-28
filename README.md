@@ -394,3 +394,64 @@ AciTrack automatically stores all fetched publications in a local SQLite databas
 - Analyze source coverage and patterns
 
 **Note:** This feature is V1 and purely additive. All existing pipeline behavior (snapshots, reports, Drive uploads) remains unchanged.
+
+### Run History
+
+AciTrack automatically tracks detailed metadata for each pipeline run, enabling trend analysis across multiple executions.
+
+**Usage:**
+
+```bash
+# View last 10 runs (default)
+python -m tools.db_run_history
+
+# View last 20 runs
+python -m tools.db_run_history --limit 20
+```
+
+**Tracked Metadata:**
+- Run ID and timestamp
+- Since timestamp and time range
+- Source count and configuration
+- Total fetched (before/after dedup)
+- New vs unchanged publication counts
+- Summarization statistics
+- Drive upload status
+
+**Per-Run Publication Tracking:**
+- Every publication is linked to the run(s) that saw it
+- Status tracked (new/unchanged)
+- Enables queries like "which publications were new in run X?"
+
+**Output Example:**
+
+```
+==========================================================================================
+Run History (Last 10 Runs)
+==========================================================================================
+
+Run ID                    Started              New  Unchg  Total  Summ
+------------------------------------------------------------------------------------------
+20241228_135543_a66fd...  2024-12-28 13:55     15     67     82    15
+20241227_120432_b3c8e...  2024-12-27 12:04     23     59     82    23
+
+==========================================================================================
+
+New Publications Per Run:
+
+  20241228_135543  15  ███████████████
+  20241227_120432  23  ███████████████████████
+
+==========================================================================================
+```
+
+**Database Tables:**
+- `runs` - Run metadata (run_id, timestamps, counts, settings)
+- `pub_runs` - Per-run publication tracking (run_id, pub_id, status, source, date)
+
+**Schema Migration:**
+- Database schema automatically migrates from v1 to v2
+- Works on fresh databases and existing databases
+- Non-blocking: run history failures don't stop the pipeline
+
+**Note:** This feature is part of schema v2. The first run after upgrade will migrate the database automatically.
