@@ -306,3 +306,61 @@ The requirements.txt pins `urllib3<2` and `requests<2.32` to maintain compatibil
 ## Development Status
 
 This is V1 - a focused implementation with core functionality: ingestion, summarization, change detection, commercial enrichment, and reporting.
+
+## Development Workflow
+
+### Branching Strategy
+
+This repository uses a three-tier branching model:
+
+- **`main`** - Production branch
+  - Stable, autonomous, production-ready code
+  - Weekly GitHub Actions runs execute on this branch
+  - Snapshot state persists here via automated commits
+  - Google Drive uploads occur from this branch
+  - **Never break main** - all changes must be tested before merging
+
+- **`dev`** - Integration/staging branch
+  - Integration point for feature development
+  - All new work should branch from `dev`
+  - No scheduled workflows run on this branch
+  - Testing ground before promoting to `main`
+
+- **`feature/*`** - Short-lived feature branches
+  - Branch from `dev` for new features or fixes
+  - Merge back to `dev` when complete
+  - Delete after merging
+
+### Workflow
+
+1. **Starting new work:**
+   ```bash
+   git checkout dev
+   git pull origin dev
+   git checkout -b feature/your-feature-name
+   ```
+
+2. **Completing work:**
+   ```bash
+   # From your feature branch
+   git checkout dev
+   git pull origin dev
+   git merge feature/your-feature-name
+   git push origin dev
+   ```
+
+3. **Promoting to production:**
+   ```bash
+   # Only when dev is stable and tested
+   git checkout main
+   git pull origin main
+   git merge dev
+   git push origin main
+   ```
+
+### Important Notes
+
+- Scheduled GitHub Actions workflows only run on `main`
+- The snapshot file (`data/snapshots/latest.json`) is only persisted from `main`
+- Local testing can be done on any branch without affecting production state
+- Use `--reset-snapshot` for testing to avoid polluting the production snapshot
