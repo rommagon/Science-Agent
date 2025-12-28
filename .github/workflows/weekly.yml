@@ -1,0 +1,76 @@
+name: Weekly AciTrack Run
+
+on:
+  # Run every Monday at 17:00 UTC
+  schedule:
+    - cron: '0 17 * * 1'
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Need full history for git operations
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create service account credentials file
+        env:
+          ACITRACK_GCP_SA_JSON: ${{ secrets.ACITRACK_GCP_SA_JSON }}
+        run: |
+          echo "$ACITRACK_GCP_SA_JSON" > $HOME/gcp-sa-key.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-sa-key.json" >> $GITHUB_ENV
+
+      - name: Run acitrack with Drive upload
+        env:
+          ACITRACK_DRIVE_FOLDER_ID: ${{ secrets.ACITRACK_DRIVE_FOLDER_ID }}
+        run: |
+          python run.py --since-days 7 --max-items-per-source 5 --upload-drive
+
+      - name: Persist snapshot state
+        run: |
+          # Configure git for bot commits
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Add snapshot file if it exists and has changes
+          if [ -f data/snapshots/latest.json ]; then
+            git add data/snapshots/latest.json || true
+
+            # Only commit if there are changes staged
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: update snapshot state from weekly run"
+              git push
+            else
+              echo "No changes to snapshot file, skipping commit"
+            fi
+          else
+            echo "Snapshot file does not exist, skipping commit"
+          fi
+
+      - name: Upload outputs as artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acitrack-outputs-${{ github.run_number }}
+          path: |
+            data/output/latest_report.md
+            data/output/latest_new.csv
+            data/output/latest_manifest.json
+          retention-days: 90
