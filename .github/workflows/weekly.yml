@@ -8,6 +8,9 @@ on:
   # Allow manual trigger
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   track:
     runs-on: ubuntu-latest
@@ -31,11 +34,19 @@ jobs:
           pip install -r requirements.txt
 
       - name: Create service account credentials file
+        run: |
+          python - <<'PY'
+          import os, json, pathlib
+          s = os.environ["ACITRACK_GCP_SA_JSON"]
+          obj = json.loads(s)  # validate JSON
+          p = pathlib.Path.home() / "gcp-sa-key.json"
+          p.write_text(json.dumps(obj))
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+            f.write(f"GOOGLE_APPLICATION_CREDENTIALS={p}\n")
+          print(f"Wrote creds to {p}")
+          PY
         env:
           ACITRACK_GCP_SA_JSON: ${{ secrets.ACITRACK_GCP_SA_JSON }}
-        run: |
-          echo "$ACITRACK_GCP_SA_JSON" > $HOME/gcp-sa-key.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-sa-key.json" >> $GITHUB_ENV
 
       - name: Run acitrack with Drive upload
         env:
@@ -56,7 +67,7 @@ jobs:
             # Only commit if there are changes staged
             if ! git diff --cached --quiet; then
               git commit -m "chore: update snapshot state from weekly run"
-              git push
+              git push origin HEAD:main
             else
               echo "No changes to snapshot file, skipping commit"
             fi
