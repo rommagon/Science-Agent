@@ -1,0 +1,33 @@
+{
+  "run_id": "20251225_200634_c3c17c91",
+  "timestamp": "2025-12-25T20:06:35.071314",
+  "since_date": "2025-12-24",
+  "config": {
+    "path": "config/sources.yaml",
+    "sha256": "1dee5429bf89cc7b1de5cf4284825ca71aca19342729baae6b673515bfdc8c38"
+  },
+  "active_sources": [
+    "Science News"
+  ],
+  "source_details": [
+    {
+      "name": "Science News",
+      "type": "rss",
+      "url": "https://www.science.org/rss/news_current.xml",
+      "kept": 0,
+      "missing_date_count": 0
+    }
+  ],
+  "counts": {
+    "total_fetched": 0,
+    "total_new": 0,
+    "total_unchanged": 0
+  },
+  "outputs": {
+    "publications_json": "data/raw/20251225_200634_c3c17c91_publications.json",
+    "changes_json": "data/raw/20251225_200634_c3c17c91_changes.json",
+    "report_md": "data/output/20251225_200634_c3c17c91_report.md",
+    "new_csv": "data/output/20251225_200634_c3c17c91_new.csv",
+    "manifest_json": "data/output/20251225_200634_c3c17c91_manifest.json"
+  }
+}

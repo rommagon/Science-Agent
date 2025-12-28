@@ -1,0 +1,46 @@
+{
+  "run_id": "20251225_194417_b50d2302",
+  "timestamp": "2025-12-25T19:44:21.760359",
+  "since_date": "2025-12-18",
+  "config": {
+    "path": "config/sources.yaml",
+    "sha256": "2c6bd90c37d7b2fb2e409e8002882912bc87e7fa80dec858bd7ac0fcf71e3933"
+  },
+  "active_sources": [
+    "Nature Cancer",
+    "Science News",
+    "PubMed - cancer (broad)"
+  ],
+  "source_details": [
+    {
+      "name": "Nature Cancer",
+      "type": "rss",
+      "url": "https://www.nature.com/natcancer.rss",
+      "kept": 1
+    },
+    {
+      "name": "Science News",
+      "type": "rss",
+      "url": "https://www.science.org/rss/news_current.xml",
+      "kept": 10
+    },
+    {
+      "name": "PubMed - cancer (broad)",
+      "type": "pubmed",
+      "query": "cancer",
+      "retmax": 200,
+      "kept": 192
+    }
+  ],
+  "counts": {
+    "total_fetched": 203,
+    "total_new": 104,
+    "total_unchanged": 99
+  },
+  "outputs": {
+    "publications_json": "data/raw/20251225_194417_b50d2302_publications.json",
+    "changes_json": "data/raw/20251225_194417_b50d2302_changes.json",
+    "report_md": "data/output/20251225_194417_b50d2302_report.md",
+    "manifest_json": "data/output/20251225_194417_b50d2302_manifest.json"
+  }
+}

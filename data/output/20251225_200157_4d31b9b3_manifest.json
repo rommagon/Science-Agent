@@ -1,0 +1,40 @@
+{
+  "run_id": "20251225_200157_4d31b9b3",
+  "timestamp": "2025-12-25T20:01:59.046852",
+  "since_date": "2025-12-18",
+  "config": {
+    "path": "config/sources.yaml",
+    "sha256": "1dee5429bf89cc7b1de5cf4284825ca71aca19342729baae6b673515bfdc8c38"
+  },
+  "active_sources": [
+    "bioRxiv (all)",
+    "medRxiv (all)"
+  ],
+  "source_details": [
+    {
+      "name": "bioRxiv (all)",
+      "type": "rss",
+      "url": "https://connect.biorxiv.org/biorxiv_xml.php?subject=all",
+      "kept": 30,
+      "missing_date_count": 0
+    },
+    {
+      "name": "medRxiv (all)",
+      "type": "rss",
+      "url": "https://connect.medrxiv.org/medrxiv_xml.php?subject=all",
+      "kept": 30,
+      "missing_date_count": 0
+    }
+  ],
+  "counts": {
+    "total_fetched": 60,
+    "total_new": 60,
+    "total_unchanged": 0
+  },
+  "outputs": {
+    "publications_json": "data/raw/20251225_200157_4d31b9b3_publications.json",
+    "changes_json": "data/raw/20251225_200157_4d31b9b3_changes.json",
+    "report_md": "data/output/20251225_200157_4d31b9b3_report.md",
+    "manifest_json": "data/output/20251225_200157_4d31b9b3_manifest.json"
+  }
+}
