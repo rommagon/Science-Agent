@@ -19,6 +19,8 @@ class Publication:
     run_id: str
     venue: str = ""  # Journal/venue name (e.g., "bioRxiv", "medRxiv")
     source_names: list[str] = None  # All sources where this pub appeared (for cross-source deduping)
+    date_raw: str = ""  # Raw date string(s) from source (for debugging)
+    date_source: str = ""  # Which date field was used (for debugging)
 
 
 def compute_id(title: str, source: str, url: str) -> str:

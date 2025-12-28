@@ -3,7 +3,7 @@
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Optional
 
@@ -262,18 +262,19 @@ def _fetch_rss_source(
         return [], 0
 
 
-def _parse_pubmed_date(date_str: str) -> tuple[Optional[datetime], bool]:
+def _parse_pubmed_date(date_str: str) -> tuple[Optional[datetime], bool, bool]:
     """Parse PubMed date string to datetime object with best-effort handling.
 
     Args:
         date_str: Date string from PubMed (various formats)
 
     Returns:
-        Tuple of (datetime object or None, missing_date_flag)
+        Tuple of (datetime object or None, missing_date_flag, low_confidence_flag)
         missing_date_flag is True if no date could be parsed
+        low_confidence_flag is True if only year was available
     """
     if not date_str:
-        return None, True
+        return None, True, False
 
     # Month name to number mapping
     month_map = {
@@ -294,16 +295,16 @@ def _parse_pubmed_date(date_str: str) -> tuple[Optional[datetime], bool]:
             parts = date_str.split('/')
             if len(parts) == 3:
                 year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
-                return datetime(year, month, day), False
+                return datetime(year, month, day), False, False
 
         # Try structured parsing for various formats
         date_lower = date_str.lower().strip()
 
-        # YYYY only (e.g., "2025")
+        # YYYY only (e.g., "2025") - Use Jan 1 and mark as low confidence
         if date_lower.isdigit() and len(date_lower) == 4:
             year = int(date_lower)
-            logger.debug("Parsed year-only date '%s' as %d-01-01", date_str, year)
-            return datetime(year, 1, 1), False
+            logger.debug("Parsed year-only date '%s' as %d-01-01 (low confidence)", date_str, year)
+            return datetime(year, 1, 1), False, True
 
         # YYYY Mon format (e.g., "2025 Nov")
         parts = date_lower.split()
@@ -315,13 +316,13 @@ def _parse_pubmed_date(date_str: str) -> tuple[Optional[datetime], bool]:
             if month_str in season_map:
                 month = season_map[month_str]
                 logger.debug("Parsed season date '%s' as %d-%02d-01", date_str, year, month)
-                return datetime(year, month, 1), False
+                return datetime(year, month, 1), False, False
 
             # Check if it's a month name
             if month_str in month_map:
                 month = month_map[month_str]
                 logger.debug("Parsed year-month date '%s' as %d-%02d-01", date_str, year, month)
-                return datetime(year, month, 1), False
+                return datetime(year, month, 1), False, False
 
         # YYYY Mon DD format (e.g., "2025 Nov 15")
         if len(parts) == 3 and parts[0].isdigit() and len(parts[0]) == 4:
@@ -330,20 +331,114 @@ def _parse_pubmed_date(date_str: str) -> tuple[Optional[datetime], bool]:
             if month_str in month_map and parts[2].isdigit():
                 month = month_map[month_str]
                 day = int(parts[2])
-                return datetime(year, month, day), False
+                return datetime(year, month, day), False, False
 
         # Fallback: try dateutil parser
         try:
             from dateutil import parser as date_parser
             parsed = date_parser.parse(date_str)
-            return parsed, False
+            return parsed, False, False
         except Exception:
             pass
 
     except Exception as e:
         logger.debug("Failed to parse PubMed date '%s': %s", date_str, e)
 
-    return None, True
+    return None, True, False
+
+
+def pick_best_pubmed_date(article: dict) -> tuple[Optional[datetime], str, str, bool]:
+    """Pick the best available date from PubMed article record.
+
+    Prefers dates in this order:
+    1. ArticleDate (if available in pubdate field with specific date)
+    2. PubMedPubDate fields (epublish, pubmed status - not available in ESummary)
+    3. Journal PubDate (fallback)
+
+    Args:
+        article: PubMed article dictionary from ESummary
+
+    Returns:
+        Tuple of (datetime, date_source, date_raw, low_confidence)
+        - datetime: Parsed date or None
+        - date_source: Which field was used (e.g., "pubdate", "sortpubdate")
+        - date_raw: Original raw date string(s)
+        - low_confidence: True if only year was available
+    """
+    # Try pubdate first (most reliable from ESummary)
+    pubdate_str = article.get("pubdate", "")
+    if pubdate_str:
+        parsed_date, missing, low_conf = _parse_pubmed_date(pubdate_str)
+        if parsed_date and not missing:
+            return parsed_date, "pubdate", pubdate_str, low_conf
+
+    # Try sortpubdate as fallback (sortable date string)
+    sortpubdate_str = article.get("sortpubdate", "")
+    if sortpubdate_str:
+        # sortpubdate is typically in YYYY/MM/DD HH:MM format
+        parsed_date, missing, low_conf = _parse_pubmed_date(sortpubdate_str)
+        if parsed_date and not missing:
+            return parsed_date, "sortpubdate", sortpubdate_str, low_conf
+
+    # Try epubdate (electronic publication date)
+    epubdate_str = article.get("epubdate", "")
+    if epubdate_str:
+        parsed_date, missing, low_conf = _parse_pubmed_date(epubdate_str)
+        if parsed_date and not missing:
+            return parsed_date, "epubdate", epubdate_str, low_conf
+
+    # No valid date found
+    raw_dates = f"pubdate={pubdate_str}, sortpubdate={sortpubdate_str}, epubdate={epubdate_str}"
+    return None, "none", raw_dates, False
+
+
+def clamp_future_date(
+    pub_date: Optional[datetime],
+    date_source: str,
+    pub_id: str,
+    title: str,
+    source_name: str,
+    low_confidence: bool
+) -> Optional[datetime]:
+    """Clamp dates that are suspiciously in the future.
+
+    If a date is more than 2 days in the future, it's likely a parsing error
+    (e.g., year-only dates defaulting to Jan 1 of next year).
+
+    Args:
+        pub_date: Publication date to validate
+        date_source: Which field the date came from
+        pub_id: Publication ID for logging
+        title: Publication title for logging
+        source_name: Source name for logging
+        low_confidence: Whether this is a low-confidence parse (year-only)
+
+    Returns:
+        Validated date or None if date is invalid
+    """
+    if not pub_date:
+        return None
+
+    # Calculate future threshold: now + 2 days
+    now = datetime.now()
+    future_threshold = now + timedelta(days=2)
+
+    if pub_date > future_threshold:
+        # Date is suspiciously in the future
+        logger.warning(
+            "Suspicious future date detected: source='%s', id='%s', title='%s', "
+            "date='%s' (from %s, low_conf=%s), threshold='%s' -> Setting to None",
+            source_name,
+            pub_id[:16],
+            title[:60],
+            pub_date.isoformat(),
+            date_source,
+            low_confidence,
+            future_threshold.strftime("%Y-%m-%d")
+        )
+        return None
+
+    return pub_date
 
 
 def _fetch_pubmed_source(
@@ -453,52 +548,55 @@ def _fetch_pubmed_source(
                     if name:
                         authors.append(name)
 
-            # Extract and parse date
-            pub_date = None
-            missing_date = False
-            pubdate_str = article.get("pubdate", "")
-            if pubdate_str:
-                pub_date, missing_date = _parse_pubmed_date(pubdate_str)
-            else:
-                missing_date = True
+            # Build URL (needed for ID computation)
+            url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+            pub_id = compute_id(title, source_name, url)
+
+            # Extract and parse date using improved date selection
+            pub_date, date_source, date_raw, low_confidence = pick_best_pubmed_date(article)
+
+            # Apply sanity clamp to reject future dates
+            pub_date_clamped = clamp_future_date(
+                pub_date, date_source, pub_id, title, source_name, low_confidence
+            )
 
             # Track missing dates
-            if missing_date:
+            if pub_date_clamped is None:
                 missing_date_count += 1
                 logger.debug(
-                    "Source '%s': PMID %s has no parseable date",
+                    "Source '%s': PMID %s has no valid date (raw='%s', source='%s')",
                     source_name,
-                    pmid
+                    pmid,
+                    date_raw[:100],
+                    date_source
                 )
 
             # Apply date filter - skip items with missing dates OR dates before cutoff
-            if pub_date and pub_date < since_date:
+            if pub_date_clamped and pub_date_clamped < since_date:
                 continue
-
-            # Build URL
-            url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
 
             # Extract journal and source info for improved raw_text
             source_info = article.get("source", "")
             fulljournalname = article.get("fulljournalname", "")
             authors_str = ", ".join(authors) if authors else "N/A"
-            date_str = pub_date.strftime("%Y-%m-%d") if pub_date else "MISSING"
+            date_str = pub_date_clamped.strftime("%Y-%m-%d") if pub_date_clamped else "MISSING"
 
             # Build metadata block for downstream enrichment
             raw_text = f"Journal: {fulljournalname or source_info}\nAuthors: {authors_str}\nPubDate: {date_str}"
 
-            # Create Publication object
-            pub_id = compute_id(title, source_name, url)
+            # Create Publication object with debug fields
             publication = Publication(
                 id=pub_id,
                 title=title,
                 authors=authors,
                 source=source_name,
-                date=pub_date.isoformat() if pub_date else "",
+                date=pub_date_clamped.isoformat() if pub_date_clamped else "",
                 url=url,
                 raw_text=raw_text,
                 summary="",  # Will be filled by summarization step
                 run_id=run_id,
+                date_raw=date_raw,
+                date_source=date_source,
             )
             publications.append(publication)
 
