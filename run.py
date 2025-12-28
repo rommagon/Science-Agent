@@ -20,6 +20,7 @@ from diff.detect_changes import detect_changes
 from enrich.commercial import enrich_publication_commercial
 from ingest.fetch import fetch_publications
 from output.report import export_new_to_csv, generate_report
+from storage.sqlite_store import store_publications
 from summarize.summarize import summarize_publications
 
 # Configure logging
@@ -342,6 +343,18 @@ def main() -> None:
         dedupe_stats["total_output"],
         dedupe_stats["duplicates_merged"]
     )
+
+    # Phase 1.6: Store publications to database (additive, non-blocking)
+    logger.info("Phase 1.6: Storing publications to database")
+    db_result = store_publications(publications, run_id)
+    if db_result["success"]:
+        logger.info(
+            "Database storage: %d inserted, %d duplicates",
+            db_result["inserted"],
+            db_result["duplicates"]
+        )
+    else:
+        logger.warning("Database storage failed: %s (continuing pipeline)", db_result["error"])
 
     # Phase 2: Detect changes
     logger.info("Phase 2: Detecting changes")

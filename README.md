@@ -364,3 +364,33 @@ This repository uses a three-tier branching model:
 - The snapshot file (`data/snapshots/latest.json`) is only persisted from `main`
 - Local testing can be done on any branch without affecting production state
 - Use `--reset-snapshot` for testing to avoid polluting the production snapshot
+
+### Publication Database (V1)
+
+AciTrack automatically stores all fetched publications in a local SQLite database for future trend analysis and historical queries.
+
+**Database Location:** `data/db/acitrack.db`
+
+**Features:**
+- Automatic schema creation on first run
+- Idempotent inserts (duplicates are ignored)
+- Non-blocking storage - pipeline continues even if database fails
+- Stores publication metadata: title, authors, source, journal, dates, URLs
+
+**Schema (V1):**
+- `publications` table with indexed fields for efficient queries
+- Indexes on: `published_date`, `source`, `run_id`, `created_at`
+
+**Behavior:**
+- Database storage occurs automatically during each run (Phase 1.6)
+- Publications are stored after deduplication but before change detection
+- Storage failures are logged as warnings without stopping the pipeline
+- The database is additive-only and does not affect existing outputs
+
+**Future Use:**
+- This database enables trend analysis across multiple runs
+- Query historical publications by source, date range, or run
+- Track publication volume over time
+- Analyze source coverage and patterns
+
+**Note:** This feature is V1 and purely additive. All existing pipeline behavior (snapshots, reports, Drive uploads) remains unchanged.

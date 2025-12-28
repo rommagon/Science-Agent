@@ -3,6 +3,8 @@ data/raw/*.json
 data/summaries/*.json
 data/snapshots/*.json
 data/output/*.md
+data/db/*.db
+data/db/*.db-journal
 
 # Python
 __pycache__/
