@@ -239,11 +239,33 @@ def get_must_reads_from_db(
         )
 
         rows = cursor.fetchall()
-        total_candidates = len(rows)
+        total_raw_pubs = len(rows)
+
+        # Track filtering stats
+        filter_stats = {
+            "total_raw": total_raw_pubs,
+            "missing_date": 0,
+            "missing_url": 0,
+            "missing_title": 0,
+            "accepted": 0,
+        }
 
         # STEP 1: Apply heuristic ranking to all candidates
         ranked_pubs = []
         for row in rows:
+            # Filter out publications with missing critical fields
+            if not row["published_date"]:
+                filter_stats["missing_date"] += 1
+                continue
+            if not row["url"]:
+                filter_stats["missing_url"] += 1
+                continue
+            if not row["title"]:
+                filter_stats["missing_title"] += 1
+                continue
+
+            filter_stats["accepted"] += 1
+
             score, reason = _compute_rank_score(
                 title=row["title"] or "",
                 summary=row["summary"] or "",
@@ -265,9 +287,35 @@ def get_must_reads_from_db(
                 "heuristic_reason": reason,
             })
 
+        # Log filtering summary
+        total_candidates = len(ranked_pubs)
+        if filter_stats["total_raw"] != filter_stats["accepted"]:
+            dropped_total = filter_stats["total_raw"] - filter_stats["accepted"]
+            logger.info(
+                "Candidate filtering: %d raw → %d accepted (dropped %d: %d missing date, %d missing URL, %d missing title)",
+                filter_stats["total_raw"],
+                filter_stats["accepted"],
+                dropped_total,
+                filter_stats["missing_date"],
+                filter_stats["missing_url"],
+                filter_stats["missing_title"],
+            )
+        else:
+            logger.info(
+                "Candidate filtering: all %d publications have required fields",
+                total_candidates,
+            )
+
         # Sort by heuristic score and take top N candidates for reranking
         ranked_pubs.sort(key=lambda x: x["heuristic_score"], reverse=True)
         shortlist = ranked_pubs[:rerank_max_candidates]
+
+        if len(ranked_pubs) > rerank_max_candidates:
+            logger.info(
+                "Shortlisting for AI rerank: top %d of %d candidates (based on heuristic scores)",
+                len(shortlist),
+                len(ranked_pubs),
+            )
 
         # STEP 2: AI reranking (optional, with caching)
         used_ai = False
