@@ -1,7 +1,8 @@
 # Data files
 data/raw/*.json
 data/summaries/*.json
-data/snapshots/*.json
+# Keep snapshot state for change detection across runs
+# data/snapshots/*.json  # DISABLED - we need to track latest.json
 data/output/*.md
 data/db/*.db
 data/db/*.db-journal

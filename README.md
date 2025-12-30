@@ -419,6 +419,28 @@ This repository uses a three-tier branching model:
 - Local testing can be done on any branch without affecting production state
 - Use `--reset-snapshot` for testing to avoid polluting the production snapshot
 
+### Snapshot Bootstrapping (One-Time Setup)
+
+If the snapshot file doesn't exist yet (e.g., new repo setup), you need to bootstrap it once:
+
+1. **Run locally to create the initial snapshot:**
+   ```bash
+   python run.py --since-days 7 --max-items-per-source 5
+   ```
+
+2. **Commit the snapshot to git:**
+   ```bash
+   git add data/snapshots/latest.json
+   git commit -m "chore: bootstrap snapshot state for change detection"
+   git push origin main
+   ```
+
+3. **Verify on next run:**
+   - Second GitHub Actions run should show non-zero "Unchanged" count
+   - Without this bootstrap, every run appears as "all new publications"
+
+**Why this matters:** The snapshot enables change detection across runs. Without it persisted in git, GitHub Actions starts fresh each time and can't detect which publications are truly new vs. previously seen.
+
 ### Publication Database (V1)
 
 AciTrack automatically stores all fetched publications in a local SQLite database for future trend analysis and historical queries.

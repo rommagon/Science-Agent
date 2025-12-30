@@ -142,27 +142,30 @@ DEPRIORITIZE (0-9 points):
 Publications:
 {publications_text}
 
-Return ONLY valid JSON array (no markdown, no extra text):
-[
-  {{
-    "pub_id": "exact_id_from_above",
-    "title": "exact_title_from_above",
-    "llm_score": 85,
-    "llm_rank": 1,
-    "llm_reason": "Novel ctDNA methylation assay with 92% sensitivity for stage I lung cancer",
-    "llm_why_it_matters": "This study validates a multi-cancer early detection platform in a prospective cohort of 10,000 patients, demonstrating clinical utility for population screening.",
-    "llm_key_findings": ["Sensitivity: 92% for stage I cancers", "Specificity: 96% in validation cohort", "Cost: $500 per test"],
-    "llm_tags": ["liquid biopsy", "ctDNA", "early detection", "screening", "clinical validation", "lung cancer"],
-    "confidence": "high"
-  }}
-]
+Return ONLY valid JSON object with a "results" array (no markdown, no extra text):
+{{
+  "results": [
+    {{
+      "pub_id": "exact_id_from_above",
+      "title": "exact_title_from_above",
+      "llm_score": 85,
+      "llm_rank": 1,
+      "llm_reason": "Novel ctDNA methylation assay with 92% sensitivity for stage I lung cancer",
+      "llm_why_it_matters": "This study validates a multi-cancer early detection platform in a prospective cohort of 10,000 patients, demonstrating clinical utility for population screening.",
+      "llm_key_findings": ["Sensitivity: 92% for stage I cancers", "Specificity: 96% in validation cohort", "Cost: $500 per test"],
+      "llm_tags": ["liquid biopsy", "ctDNA", "early detection", "screening", "clinical validation", "lung cancer"],
+      "confidence": "high"
+    }}
+  ]
+}}
 
 CRITICAL VALIDATION RULES:
-- Include ALL {len(publications)} publications
+- Include ALL {len(publications)} publications in the "results" array
 - pub_id MUST be the EXACT string from the input (do not modify or invent)
 - title MUST be the EXACT title from the input (copy it verbatim)
 - Scores 0-100 (integers)
 - Unique ranks 1..N
+- Keep llm_reason and llm_why_it_matters SHORT (max 200 chars each) to prevent truncation
 - Tags: 0-6 relevant tags from: biomarker, screening, early detection, ctDNA, methylation, liquid biopsy, clinical trial, FDA, MCED, imaging, sensitivity, specificity
 - If findings not in text, use empty array [] or ["Not enough information"]
 - Confidence: high/medium/low based on available data
@@ -211,7 +214,7 @@ def rerank_with_openai(
             len(publications),
         )
 
-        # Call OpenAI API with low temperature for deterministic behavior
+        # Call OpenAI API with JSON mode and low temperature
         response = client.chat.completions.create(
             model=model,
             messages=[
@@ -222,21 +225,87 @@ def rerank_with_openai(
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,  # Low temperature for consistent, deterministic output
-            max_tokens=6000,  # Increased for more detailed responses with tags
+            max_tokens=4000,  # Reduced to prevent truncation (50 pubs * ~80 tokens each)
+            response_format={"type": "json_object"},  # STRICT JSON MODE
         )
 
         # Parse response
         response_text = response.choices[0].message.content.strip()
 
-        # Remove markdown code blocks if present
-        if response_text.startswith("```"):
-            lines = response_text.split("\n")
-            response_text = "\n".join(
-                line for line in lines if not line.startswith("```")
+        # Try to parse JSON
+        try:
+            rerank_results = _parse_rerank_response(response_text)
+        except json.JSONDecodeError as e:
+            # RETRY ONCE with repair prompt
+            logger.warning(
+                "Failed to parse OpenAI JSON response (attempt 1/2): %s",
+                e,
+            )
+            logger.warning(
+                "Response preview (first 400 chars): %s...",
+                response_text[:400],
+            )
+            logger.info("Retrying with repair prompt")
+
+            # Build repair prompt
+            repair_prompt = f"""Your previous output was invalid JSON and could not be parsed.
+
+Error: {e}
+
+Please re-output the rerank results as VALID JSON ONLY. No markdown, no explanation.
+
+Expected format:
+{{
+  "results": [
+    {{
+      "pub_id": "...",
+      "title": "...",
+      "llm_score": 85,
+      "llm_rank": 1,
+      "llm_reason": "... (SHORT, max 200 chars)",
+      "llm_why_it_matters": "... (SHORT, max 200 chars)",
+      "llm_key_findings": [...],
+      "llm_tags": [...],
+      "confidence": "high"
+    }}
+  ]
+}}
+
+Include all {len(publications)} publications from the original request in the "results" array."""
+
+            # Retry call
+            retry_response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Return ONLY valid JSON. No markdown, no explanation.",
+                    },
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": response_text},
+                    {"role": "user", "content": repair_prompt},
+                ],
+                temperature=0.0,  # Zero temperature for repair
+                max_tokens=4000,
+                response_format={"type": "json_object"},
             )
 
-        # Parse JSON
-        rerank_results = json.loads(response_text)
+            retry_text = retry_response.choices[0].message.content.strip()
+
+            try:
+                rerank_results = _parse_rerank_response(retry_text)
+                logger.info("Successfully parsed JSON on retry (attempt 2/2)")
+            except json.JSONDecodeError as retry_error:
+                logger.error(
+                    "Failed to parse JSON on retry (attempt 2/2): %s",
+                    retry_error,
+                )
+                logger.error(
+                    "Retry response preview (first 400 chars): %s...",
+                    retry_text[:400],
+                )
+                logger.error("Falling back to heuristic ranking")
+                return None
 
         if not isinstance(rerank_results, list):
             logger.error("OpenAI response is not a list: %s", response_text[:200])
@@ -250,13 +319,47 @@ def rerank_with_openai(
     except ImportError:
         logger.warning("OpenAI library not installed, skipping LLM rerank")
         return None
-    except json.JSONDecodeError as e:
-        logger.error("Failed to parse OpenAI JSON response: %s", e)
-        logger.debug("Response text: %s", response_text[:500])
-        return None
     except Exception as e:
         logger.error("OpenAI API call failed: %s", e)
         return None
+
+
+def _parse_rerank_response(response_text: str) -> List[dict]:
+    """Parse OpenAI rerank response, handling various formats.
+
+    Args:
+        response_text: Raw response text from OpenAI
+
+    Returns:
+        List of rerank result dicts
+
+    Raises:
+        json.JSONDecodeError: If response is not valid JSON
+    """
+    # Remove markdown code blocks if present
+    if response_text.startswith("```"):
+        lines = response_text.split("\n")
+        response_text = "\n".join(
+            line for line in lines if not line.startswith("```")
+        )
+
+    # Parse JSON
+    parsed = json.loads(response_text)
+
+    # Handle both array and object with "results" or similar key
+    if isinstance(parsed, dict):
+        # Try common keys for array wrapper
+        for key in ["results", "rerank_results", "publications", "data"]:
+            if key in parsed and isinstance(parsed[key], list):
+                return parsed[key]
+        # If no recognized key, raise error
+        raise json.JSONDecodeError(
+            "Response is object but lacks recognized array key",
+            response_text,
+            0,
+        )
+
+    return parsed
 
 
 def _normalize_title(title: str) -> str:
