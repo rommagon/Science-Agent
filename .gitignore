@@ -26,3 +26,12 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Node.js / UI
+node_modules/
+mcp_server/ui/dist/
+mcp_server/ui/node_modules/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

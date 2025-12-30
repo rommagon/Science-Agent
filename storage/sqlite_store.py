@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_PATH = "data/db/acitrack.db"
 
 # Schema version for future migrations
-SCHEMA_VERSION = 2  # Bumped for run history tables
+SCHEMA_VERSION = 3  # Bumped for must-reads rerank cache
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
@@ -92,6 +92,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         cursor.execute("INSERT INTO schema_version (version) VALUES (2)")
         current_version = 2
 
+    if current_version < 3:
+        logger.info("Migrating schema from version %d to 3", current_version)
+        _migrate_to_v3(cursor)
+        cursor.execute("INSERT INTO schema_version (version) VALUES (3)")
+        current_version = 3
+
     conn.commit()
     logger.info("Database schema initialized (version %d)", current_version)
 
@@ -155,6 +161,39 @@ def _migrate_to_v2(cursor: sqlite3.Cursor) -> None:
     """)
 
     logger.info("Schema migrated to version 2: added runs and pub_runs tables")
+
+
+def _migrate_to_v3(cursor: sqlite3.Cursor) -> None:
+    """Migrate database schema to version 3.
+
+    Adds must-reads rerank cache table.
+
+    Args:
+        cursor: Database cursor
+    """
+    # Must-reads rerank cache table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS must_reads_rerank_cache (
+            pub_id TEXT NOT NULL,
+            rerank_version TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            model TEXT,
+            llm_score REAL,
+            llm_rank INTEGER,
+            llm_reason TEXT,
+            llm_why TEXT,
+            llm_findings TEXT,
+            PRIMARY KEY (pub_id, rerank_version)
+        )
+    """)
+
+    # Index for cache lookups
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_rerank_cache_created_at
+        ON must_reads_rerank_cache(created_at)
+    """)
+
+    logger.info("Schema migrated to version 3: added must_reads_rerank_cache table")
 
 
 def _get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:

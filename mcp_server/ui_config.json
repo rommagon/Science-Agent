@@ -1,0 +1,16 @@
+{
+  "widgets": [
+    {
+      "id": "must-reads-widget",
+      "name": "Must Reads",
+      "description": "Display ranked must-read publications from acitrack",
+      "tool_name": "get_must_reads",
+      "component_path": "./ui/dist/must-reads-widget.js",
+      "component_name": "MustReadsWidget",
+      "data_mapping": {
+        "type": "json",
+        "source": "tool_response"
+      }
+    }
+  ]
+}
