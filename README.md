@@ -224,12 +224,18 @@ Run with the `--upload-drive` flag to upload the latest outputs to Google Drive:
 python run.py --since-days 7 --max-items-per-source 5 --upload-drive
 ```
 
-This will upload three files to your configured Drive folder:
+This will upload seven files to your configured Drive folder:
 - `latest_report.md` - Full markdown report
 - `latest_new.csv` - CSV export of new publications
 - `latest_manifest.json` - Run provenance manifest
+- `latest_must_reads.json` - Must-reads with AI rankings (structured data)
+- `latest_must_reads.md` - Must-reads in readable markdown format
+- `latest_summaries.json` - AI-generated summaries for must-reads
+- `latest_db.sqlite.gz` - Compressed database snapshot
 
 If files with the same names already exist in the folder, they will be updated (not duplicated).
+
+**Note:** Must-reads and summaries are generated during each run and uploaded automatically. If `OPENAI_API_KEY` is not set, must-reads will use heuristic-only ranking and summaries will fall back to available fields.
 
 ### Verification
 
@@ -255,6 +261,54 @@ This helps verify you're using the correct credentials. After upload, you'll see
 
 **"File not found" errors**
 - The latest pointer files must exist before upload. Run the pipeline at least once without `--upload-drive` first.
+
+## Export Tools
+
+The project includes standalone export tools for generating Drive artifacts locally:
+
+### Export Must-Reads
+
+Generate must-reads JSON and Markdown files:
+
+```bash
+# Export with AI reranking (requires OPENAI_API_KEY)
+python3 tools/export_must_reads.py --since-days 30 --limit 20
+
+# Export without AI (heuristic-only)
+python3 tools/export_must_reads.py --no-ai
+```
+
+Outputs:
+- `data/output/latest_must_reads.json` - Structured must-reads data
+- `data/output/latest_must_reads.md` - Human-readable markdown
+
+### Export Summaries
+
+Generate AI summaries for must-reads (requires must-reads JSON):
+
+```bash
+# Export summaries (requires OPENAI_API_KEY for LLM generation)
+python3 tools/export_summaries.py
+
+# Specify custom paths
+python3 tools/export_summaries.py --input custom_must_reads.json --output custom_summaries.json
+```
+
+Outputs:
+- `data/output/latest_summaries.json` - AI-generated summaries with caching
+
+**Summary caching:** Results are cached in SQLite (`must_reads_summary_cache` table) keyed by `(pub_id, summary_version)`. To regenerate summaries with a new prompt, increment `SUMMARY_VERSION` in `tools/export_summaries.py`.
+
+### Export Database Artifact
+
+Create a compressed database snapshot:
+
+```bash
+python3 tools/export_db_artifact.py
+```
+
+Outputs:
+- `data/output/latest_db.sqlite.gz` - Gzipped database (~70% compression)
 
 ## Testing
 
