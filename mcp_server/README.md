@@ -7,7 +7,9 @@ This directory contains the Model Context Protocol (MCP) server for acitrack, in
 ```
 mcp_server/
 ├── server.py           # MCP server with tool definitions
-├── must_reads.py       # Must-reads ranking logic
+├── must_reads.py       # Must-reads ranking logic with AI reranker integration
+├── ai_reranker.py      # OpenAI-based reranking module
+├── rerank_cache.py     # SQLite cache for rerank results
 ├── ui_config.json      # UI widget registration
 └── ui/                 # OpenAI Apps SDK UI widget
     ├── package.json
@@ -20,13 +22,37 @@ mcp_server/
 
 ## Features
 
+### Optional AI Reranking (v1)
+
+**New in this version:** The must-reads tool now supports optional AI-powered reranking using OpenAI's API. This provides:
+
+- **Improved Ranking:** LLM evaluates publications for relevance to early cancer detection
+- **Better Explanations:** AI-generated "why it matters" and key findings
+- **Automatic Caching:** Rerank results are cached in SQLite to minimize API calls
+- **Strict Fallback:** Works perfectly without `OPENAI_API_KEY` - falls back to heuristic scoring
+
+**How it works:**
+1. Heuristic ranking generates shortlist of top N candidates (default: 50)
+2. If `OPENAI_API_KEY` is set and `use_ai=true`, shortlist is sent to OpenAI for reranking
+3. Cached results are used when available (keyed by pub_id + rerank_version)
+4. If AI call fails or key is missing, heuristic scores are used
+5. Final results include both heuristic and LLM scores
+
+**No Breaking Changes:**
+- Works without `OPENAI_API_KEY` (heuristic-only mode)
+- Does NOT require API key in GitHub Actions
+- Database schema auto-migrates (v2 → v3)
+- Existing pipeline (run.py, snapshots, Drive) untouched
+
 ### MCP Tool: `get_must_reads`
 
-Retrieves and ranks publications from the acitrack database using a heuristic scoring algorithm.
+Retrieves and ranks publications from the acitrack database using heuristic scoring with optional AI reranking.
 
 **Parameters:**
 - `since_days` (int, optional): Number of days to look back (default: 7, min: 1, max: 90)
 - `limit` (int, optional): Maximum number of results (default: 10, min: 1, max: 50)
+- `use_ai` (bool, optional): Enable AI reranking if `OPENAI_API_KEY` is available (default: true)
+- `rerank_max_candidates` (int, optional): Max candidates to pass to AI reranker (default: 50, min: 10, max: 200)
 
 **Returns:** JSON with structure:
 ```json
@@ -39,15 +65,21 @@ Retrieves and ranks publications from the acitrack database using a heuristic sc
       "source": "string",
       "venue": "string",
       "url": "string",
+      "score_total": 0,
+      "score_components": {
+        "heuristic": 0,
+        "llm": 0 | null
+      },
+      "explanation": "string (1 sentence)",
       "why_it_matters": "string (1-2 lines)",
-      "key_findings": ["string", "string", "string"],
-      "rank_score": 0,
-      "rank_reason": "string"
+      "key_findings": ["string", "string", "string"]
     }
   ],
   "generated_at": "ISO8601",
   "window_days": 7,
-  "total_candidates": 0
+  "total_candidates": 0,
+  "used_ai": false,
+  "rerank_version": "v1" | null
 }
 ```
 
@@ -125,7 +157,75 @@ python3 -m mcp_server.server
 
 The server communicates via stdio and expects JSON-RPC messages.
 
+### 4. (Optional) Set OPENAI_API_KEY for AI Reranking
+
+```bash
+# Set your OpenAI API key (optional)
+export OPENAI_API_KEY="sk-..."
+```
+
+**Note:** The tool works perfectly without this key - it will use heuristic-only ranking.
+
 ## Testing
+
+### Quick Test Script
+
+Use the provided test script to verify both heuristic and AI-enabled modes:
+
+```bash
+# Test without AI (always works)
+python3 tools/check_must_reads.py
+
+# Test with AI (requires OPENAI_API_KEY)
+export OPENAI_API_KEY="sk-..."
+python3 tools/check_must_reads.py
+```
+
+**Output:** The script will:
+1. Run heuristic-only mode (`use_ai=False`)
+2. Run AI-enabled mode (`use_ai=True`)
+3. Compare rankings
+4. Save results to `data/output/must_reads_*.json`
+
+### Acceptance Tests
+
+**Without OPENAI_API_KEY:**
+```bash
+unset OPENAI_API_KEY
+python3 tools/check_must_reads.py
+```
+
+Expected:
+- ✅ Tool returns list of must-reads
+- ✅ No crash or errors
+- ✅ `used_ai: false` in output
+- ✅ `score_components.llm: null`
+
+**With OPENAI_API_KEY:**
+```bash
+export OPENAI_API_KEY="sk-..."
+python3 tools/check_must_reads.py
+```
+
+Expected:
+- ✅ Rankings differ from heuristic-only
+- ✅ `used_ai: true` in output
+- ✅ `score_components.llm` has values
+- ✅ Better explanations in `why_it_matters` and `key_findings`
+
+**Cache Verification:**
+```bash
+# Run twice with AI enabled
+export OPENAI_API_KEY="sk-..."
+python3 tools/check_must_reads.py
+python3 tools/check_must_reads.py
+```
+
+Expected:
+- ✅ Second run is faster (cached results)
+- ✅ Check SQLite: `SELECT COUNT(*) FROM must_reads_rerank_cache;`
+
+## Testing (Original)
 
 ### Test Tool Output Shape
 
