@@ -98,6 +98,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         cursor.execute("INSERT INTO schema_version (version) VALUES (3)")
         current_version = 3
 
+    if current_version < 4:
+        logger.info("Migrating schema from version %d to 4", current_version)
+        _migrate_to_v4(cursor)
+        cursor.execute("INSERT INTO schema_version (version) VALUES (4)")
+        current_version = 4
+
     conn.commit()
     logger.info("Database schema initialized (version %d)", current_version)
 
@@ -194,6 +200,39 @@ def _migrate_to_v3(cursor: sqlite3.Cursor) -> None:
     """)
 
     logger.info("Schema migrated to version 3: added must_reads_rerank_cache table")
+
+
+def _migrate_to_v4(cursor: sqlite3.Cursor) -> None:
+    """Migrate database schema to version 4.
+
+    Adds must-reads summary cache table for LLM-generated summaries.
+
+    Args:
+        cursor: Database cursor
+    """
+    # Must-reads summary cache table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS must_reads_summary_cache (
+            pub_id TEXT NOT NULL,
+            summary_version TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            model TEXT,
+            why_it_matters TEXT,
+            key_findings TEXT,
+            study_type TEXT,
+            evidence_strength TEXT,
+            evidence_rationale TEXT,
+            PRIMARY KEY (pub_id, summary_version)
+        )
+    """)
+
+    # Index for cache lookups
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_summary_cache_created_at
+        ON must_reads_summary_cache(created_at)
+    """)
+
+    logger.info("Schema migrated to version 4: added must_reads_summary_cache table")
 
 
 def _get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
