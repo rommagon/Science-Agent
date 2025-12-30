@@ -3,6 +3,8 @@ data/raw/*.json
 data/summaries/*.json
 data/snapshots/*.json
 data/output/*.md
+data/db/*.db
+data/db/*.db-journal
 
 # Python
 __pycache__/
@@ -24,3 +26,16 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Node.js / UI
+node_modules/
+mcp_server/ui/dist/
+mcp_server/ui/node_modules/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local must-reads debug outputs
+data/output/must_reads_ai.json
+data/output/must_reads_heuristic.json

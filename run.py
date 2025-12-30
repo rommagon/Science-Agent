@@ -20,6 +20,7 @@ from diff.detect_changes import detect_changes
 from enrich.commercial import enrich_publication_commercial
 from ingest.fetch import fetch_publications
 from output.report import export_new_to_csv, generate_report
+from storage.sqlite_store import store_publications, store_run_history
 from summarize.summarize import summarize_publications
 
 # Configure logging
@@ -249,8 +250,9 @@ def main() -> None:
     if len(sys.argv) == 1:
         print("\nDemo mode: python run.py --reset-snapshot --since-days 7 --max-items-per-source 5\n")
 
-    # Generate unique run ID
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
+    # Generate unique run ID and track start time
+    run_start_time = datetime.now()
+    run_id = run_start_time.strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
 
     # Calculate cutoff date - --since-date overrides --since-days
     if args.since_date:
@@ -342,6 +344,18 @@ def main() -> None:
         dedupe_stats["total_output"],
         dedupe_stats["duplicates_merged"]
     )
+
+    # Phase 1.6: Store publications to database (additive, non-blocking)
+    logger.info("Phase 1.6: Storing publications to database")
+    db_result = store_publications(publications, run_id)
+    if db_result["success"]:
+        logger.info(
+            "Database storage: %d inserted, %d duplicates",
+            db_result["inserted"],
+            db_result["duplicates"]
+        )
+    else:
+        logger.warning("Database storage failed: %s (continuing pipeline)", db_result["error"])
 
     # Phase 2: Detect changes
     logger.info("Phase 2: Detecting changes")
@@ -507,6 +521,61 @@ def main() -> None:
     logger.info("Phase 6: Creating latest pointers")
     create_latest_pointers(run_id, outdir)
 
+    # Phase 6.5: Export Drive artifacts (must-reads + summaries + db)
+    logger.info("Phase 6.5: Exporting Drive artifacts (must-reads + summaries + db)")
+    try:
+        from tools.export_must_reads import export_must_reads
+        from tools.export_summaries import export_summaries
+        from tools.export_db_artifact import export_db_artifact
+
+        # Use data/output/ subdirectory for all exports
+        output_subdir = outdir / "output"
+
+        # Export must-reads (JSON + Markdown)
+        try:
+            must_reads_result = export_must_reads(
+                since_days=30,
+                limit=20,
+                use_ai=True,  # Will fall back to heuristic if no API key
+                output_dir=output_subdir
+            )
+            logger.info("Exported must-reads: %d items (used_ai=%s)",
+                       must_reads_result['count'],
+                       must_reads_result['used_ai'])
+        except Exception as e:
+            logger.warning("Failed to export must-reads (continuing): %s", e)
+
+        # Export summaries (requires must-reads JSON)
+        try:
+            summaries_result = export_summaries(
+                input_path=output_subdir / "latest_must_reads.json",
+                output_path=output_subdir / "latest_summaries.json"
+            )
+            logger.info("Exported summaries: %d items (cached=%d, generated=%d)",
+                       summaries_result['total_count'],
+                       summaries_result['cached_count'],
+                       summaries_result['generated_count'])
+        except Exception as e:
+            logger.warning("Failed to export summaries (continuing): %s", e)
+
+        # Export database artifact (gzipped)
+        try:
+            db_result = export_db_artifact(
+                output_path=output_subdir / "latest_db.sqlite.gz"
+            )
+            if db_result['success']:
+                logger.info("Exported database: %.2f MB -> %.2f MB (%.1f%% reduction)",
+                           db_result['original_size_mb'],
+                           db_result['compressed_size_mb'],
+                           db_result['compression_ratio'])
+            else:
+                logger.warning("Database export skipped: %s", db_result.get('error', 'Unknown'))
+        except Exception as e:
+            logger.warning("Failed to export database (continuing): %s", e)
+
+    except Exception as e:
+        logger.warning("Phase 6.5 failed (non-blocking): %s", e)
+
     # Phase 7 (optional): Upload to Google Drive
     drive_upload_success = True
     if args.upload_drive:
@@ -543,6 +612,39 @@ def main() -> None:
             logger.error("Google Drive upload failed: %s", e)
             print(f"\n❌ ERROR: Google Drive upload failed: {e}\n")
             drive_upload_success = False
+
+    # Phase 7.5: Store run history (additive, non-blocking)
+    logger.info("Phase 7.5: Storing run history to database")
+
+    # Calculate summarized count (publications with summaries)
+    summarized_count = len([p for p in changes["all_with_status"]
+                           if p.get("one_liner") and p.get("one_liner") != "Summary skipped due to cap."])
+
+    run_history_result = store_run_history(
+        run_id=run_id,
+        started_at=run_start_time.isoformat(),
+        since_timestamp=since_date.isoformat(),
+        max_items_per_source=args.max_items_per_source if args.max_items_per_source else 0,
+        sources_count=len(sources),
+        total_fetched=dedupe_stats["total_input"],
+        total_deduped=dedupe_stats["total_output"],
+        new_count=changes["count_new"],
+        unchanged_count=changes["count_total"] - changes["count_new"],
+        summarized_count=summarized_count,
+        upload_drive=args.upload_drive,
+        publications_with_status=changes["all_with_status"]
+    )
+
+    if run_history_result["success"]:
+        logger.info(
+            "Run history stored: %d publications tracked",
+            run_history_result["pub_runs_inserted"]
+        )
+    else:
+        logger.warning(
+            "Run history storage failed: %s (continuing)",
+            run_history_result["error"]
+        )
 
     # Summary
     print("\n" + "=" * 70)

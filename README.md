@@ -224,12 +224,18 @@ Run with the `--upload-drive` flag to upload the latest outputs to Google Drive:
 python run.py --since-days 7 --max-items-per-source 5 --upload-drive
 ```
 
-This will upload three files to your configured Drive folder:
+This will upload seven files to your configured Drive folder:
 - `latest_report.md` - Full markdown report
 - `latest_new.csv` - CSV export of new publications
 - `latest_manifest.json` - Run provenance manifest
+- `latest_must_reads.json` - Must-reads with AI rankings (structured data)
+- `latest_must_reads.md` - Must-reads in readable markdown format
+- `latest_summaries.json` - AI-generated summaries for must-reads
+- `latest_db.sqlite.gz` - Compressed database snapshot
 
 If files with the same names already exist in the folder, they will be updated (not duplicated).
+
+**Note:** Must-reads and summaries are generated during each run and uploaded automatically. If `OPENAI_API_KEY` is not set, must-reads will use heuristic-only ranking and summaries will fall back to available fields.
 
 ### Verification
 
@@ -255,6 +261,54 @@ This helps verify you're using the correct credentials. After upload, you'll see
 
 **"File not found" errors**
 - The latest pointer files must exist before upload. Run the pipeline at least once without `--upload-drive` first.
+
+## Export Tools
+
+The project includes standalone export tools for generating Drive artifacts locally:
+
+### Export Must-Reads
+
+Generate must-reads JSON and Markdown files:
+
+```bash
+# Export with AI reranking (requires OPENAI_API_KEY)
+python3 tools/export_must_reads.py --since-days 30 --limit 20
+
+# Export without AI (heuristic-only)
+python3 tools/export_must_reads.py --no-ai
+```
+
+Outputs:
+- `data/output/latest_must_reads.json` - Structured must-reads data
+- `data/output/latest_must_reads.md` - Human-readable markdown
+
+### Export Summaries
+
+Generate AI summaries for must-reads (requires must-reads JSON):
+
+```bash
+# Export summaries (requires OPENAI_API_KEY for LLM generation)
+python3 tools/export_summaries.py
+
+# Specify custom paths
+python3 tools/export_summaries.py --input custom_must_reads.json --output custom_summaries.json
+```
+
+Outputs:
+- `data/output/latest_summaries.json` - AI-generated summaries with caching
+
+**Summary caching:** Results are cached in SQLite (`must_reads_summary_cache` table) keyed by `(pub_id, summary_version)`. To regenerate summaries with a new prompt, increment `SUMMARY_VERSION` in `tools/export_summaries.py`.
+
+### Export Database Artifact
+
+Create a compressed database snapshot:
+
+```bash
+python3 tools/export_db_artifact.py
+```
+
+Outputs:
+- `data/output/latest_db.sqlite.gz` - Gzipped database (~70% compression)
 
 ## Testing
 
@@ -306,3 +360,221 @@ The requirements.txt pins `urllib3<2` and `requests<2.32` to maintain compatibil
 ## Development Status
 
 This is V1 - a focused implementation with core functionality: ingestion, summarization, change detection, commercial enrichment, and reporting.
+
+## Development Workflow
+
+### Branching Strategy
+
+This repository uses a three-tier branching model:
+
+- **`main`** - Production branch
+  - Stable, autonomous, production-ready code
+  - Weekly GitHub Actions runs execute on this branch
+  - Snapshot state persists here via automated commits
+  - Google Drive uploads occur from this branch
+  - **Never break main** - all changes must be tested before merging
+
+- **`dev`** - Integration/staging branch
+  - Integration point for feature development
+  - All new work should branch from `dev`
+  - No scheduled workflows run on this branch
+  - Testing ground before promoting to `main`
+
+- **`feature/*`** - Short-lived feature branches
+  - Branch from `dev` for new features or fixes
+  - Merge back to `dev` when complete
+  - Delete after merging
+
+### Workflow
+
+1. **Starting new work:**
+   ```bash
+   git checkout dev
+   git pull origin dev
+   git checkout -b feature/your-feature-name
+   ```
+
+2. **Completing work:**
+   ```bash
+   # From your feature branch
+   git checkout dev
+   git pull origin dev
+   git merge feature/your-feature-name
+   git push origin dev
+   ```
+
+3. **Promoting to production:**
+   ```bash
+   # Only when dev is stable and tested
+   git checkout main
+   git pull origin main
+   git merge dev
+   git push origin main
+   ```
+
+### Important Notes
+
+- Scheduled GitHub Actions workflows only run on `main`
+- The snapshot file (`data/snapshots/latest.json`) is only persisted from `main`
+- Local testing can be done on any branch without affecting production state
+- Use `--reset-snapshot` for testing to avoid polluting the production snapshot
+
+### Publication Database (V1)
+
+AciTrack automatically stores all fetched publications in a local SQLite database for future trend analysis and historical queries.
+
+**Database Location:** `data/db/acitrack.db`
+
+**Features:**
+- Automatic schema creation on first run
+- Idempotent inserts (duplicates are ignored)
+- Non-blocking storage - pipeline continues even if database fails
+- Stores publication metadata: title, authors, source, journal, dates, URLs
+
+**Schema (V1):**
+- `publications` table with indexed fields for efficient queries
+- Indexes on: `published_date`, `source`, `run_id`, `created_at`
+
+**Behavior:**
+- Database storage occurs automatically during each run (Phase 1.6)
+- Publications are stored after deduplication but before change detection
+- Storage failures are logged as warnings without stopping the pipeline
+- The database is additive-only and does not affect existing outputs
+
+**Future Use:**
+- This database enables trend analysis across multiple runs
+- Query historical publications by source, date range, or run
+- Track publication volume over time
+- Analyze source coverage and patterns
+
+**Note:** This feature is V1 and purely additive. All existing pipeline behavior (snapshots, reports, Drive uploads) remains unchanged.
+
+### Run History
+
+AciTrack automatically tracks detailed metadata for each pipeline run, enabling trend analysis across multiple executions.
+
+**Usage:**
+
+```bash
+# View last 10 runs (default)
+python -m tools.db_run_history
+
+# View last 20 runs
+python -m tools.db_run_history --limit 20
+```
+
+**Tracked Metadata:**
+- Run ID and timestamp
+- Since timestamp and time range
+- Source count and configuration
+- Total fetched (before/after dedup)
+- New vs unchanged publication counts
+- Summarization statistics
+- Drive upload status
+
+**Per-Run Publication Tracking:**
+- Every publication is linked to the run(s) that saw it
+- Status tracked (new/unchanged)
+- Enables queries like "which publications were new in run X?"
+
+**Output Example:**
+
+```
+==========================================================================================
+Run History (Last 10 Runs)
+==========================================================================================
+
+Run ID                    Started              New  Unchg  Total  Summ
+------------------------------------------------------------------------------------------
+20241228_135543_a66fd...  2024-12-28 13:55     15     67     82    15
+20241227_120432_b3c8e...  2024-12-27 12:04     23     59     82    23
+
+==========================================================================================
+
+New Publications Per Run:
+
+  20241228_135543  15  ███████████████
+  20241227_120432  23  ███████████████████████
+
+==========================================================================================
+```
+
+**Database Tables:**
+- `runs` - Run metadata (run_id, timestamps, counts, settings)
+- `pub_runs` - Per-run publication tracking (run_id, pub_id, status, source, date)
+
+**Schema Migration:**
+- Database schema automatically migrates from v1 to v2
+- Works on fresh databases and existing databases
+- Non-blocking: run history failures don't stop the pipeline
+
+**Note:** This feature is part of schema v2. The first run after upgrade will migrate the database automatically.
+
+### Must Reads (MCP + OpenAI Apps SDK)
+
+AciTrack includes a "Must Reads" feature that integrates with OpenAI Custom GPT via the Model Context Protocol (MCP). This provides an interactive UI for browsing and exploring the most important recent publications.
+
+**Key Features:**
+- Intelligent ranking based on source priority, recency, and keyword relevance
+- Interactive card-based UI with Open, Explain, and Refresh actions
+- Persistent save/bookmark functionality
+- Works with SQLite database or falls back to latest run outputs
+
+**Quick Start:**
+
+```bash
+# 1. Install MCP dependency
+python3 -m pip install mcp
+
+# 2. Build the UI widget (requires Node.js/npm)
+cd mcp_server/ui
+npm install
+npm run build
+
+# 3. Run the MCP server locally
+cd ../..
+python3 -m mcp_server.server
+
+# 4. Test the tool output
+python3 << 'EOF'
+from mcp_server.must_reads import get_must_reads_from_db
+import json
+result = get_must_reads_from_db(since_days=7, limit=10)
+print(json.dumps(result, indent=2))
+EOF
+
+# 5. Test the UI locally
+cd mcp_server/ui
+npm run dev
+# Visit http://localhost:5173
+```
+
+**Integration with Custom GPT:**
+
+To use Must Reads in ChatGPT, configure your Custom GPT with the MCP server:
+
+```json
+{
+  "mcp_servers": [
+    {
+      "name": "acitrack",
+      "command": "python3",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "/path/to/acitracker_v1"
+    }
+  ]
+}
+```
+
+Then use prompts like:
+- "Show me the must-read publications from the last week"
+- "What are the top cancer research papers from the last 30 days?"
+
+**Ranking Algorithm:**
+
+Publications are scored (0-600 points) based on:
+- **Source Priority (0-100):** Nature Cancer (100), Science (90), The Lancet (80), etc.
+- **Recency (0-200):** < 7 days (200), < 14 days (150), < 30 days (100)
+- **Keywords (0-300):** screening, biomarker, early detection, ctDNA, methylation, liquid biopsy, etc.
+
+**For detailed documentation, see:** [mcp_server/README.md](mcp_server/README.md)

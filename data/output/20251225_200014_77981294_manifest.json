@@ -1,0 +1,65 @@
+{
+  "run_id": "20251225_200014_77981294",
+  "timestamp": "2025-12-25T20:00:19.982181",
+  "since_date": "2025-12-18",
+  "config": {
+    "path": "config/sources.yaml",
+    "sha256": "84f0a1930f6d13e8fa8e7e4eb9130657f741b87a4ea76a0b32da8dac7b489a48"
+  },
+  "active_sources": [
+    "Nature Cancer",
+    "Science News",
+    "bioRxiv (all)",
+    "medRxiv (all)",
+    "PubMed - cancer (broad)"
+  ],
+  "source_details": [
+    {
+      "name": "Nature Cancer",
+      "type": "rss",
+      "url": "https://www.nature.com/natcancer.rss",
+      "kept": 1,
+      "missing_date_count": 0
+    },
+    {
+      "name": "Science News",
+      "type": "rss",
+      "url": "https://www.science.org/rss/news_current.xml",
+      "kept": 10,
+      "missing_date_count": 0
+    },
+    {
+      "name": "bioRxiv (all)",
+      "type": "rss",
+      "url": "https://www.biorxiv.org/rss/recent.xml",
+      "kept": 0,
+      "missing_date_count": 0
+    },
+    {
+      "name": "medRxiv (all)",
+      "type": "rss",
+      "url": "https://www.medrxiv.org/rss/recent.xml",
+      "kept": 0,
+      "missing_date_count": 0
+    },
+    {
+      "name": "PubMed - cancer (broad)",
+      "type": "pubmed",
+      "query": "cancer",
+      "retmax": 200,
+      "kept": 162,
+      "missing_date_count": 0
+    }
+  ],
+  "counts": {
+    "total_fetched": 173,
+    "total_new": 173,
+    "total_unchanged": 0
+  },
+  "outputs": {
+    "publications_json": "data/raw/20251225_200014_77981294_publications.json",
+    "changes_json": "data/raw/20251225_200014_77981294_changes.json",
+    "report_md": "data/output/20251225_200014_77981294_report.md",
+    "manifest_json": "data/output/20251225_200014_77981294_manifest.json"
+  }
+}
