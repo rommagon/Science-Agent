@@ -58,7 +58,13 @@ const MustReadsWidget: React.FC<MustReadsWidgetProps> = ({ data }) => {
   }, []);
 
   const handleOpen = (url: string) => {
-    window.openai.openExternal({ href: url });
+    if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+      window.openai.openExternal({ href: url });
+    }
+  };
+
+  const isValidUrl = (url: string): boolean => {
+    return url && (url.startsWith('http://') || url.startsWith('https://'));
   };
 
   const handleExplainWhy = (title: string, whyItMatters: string) => {
@@ -202,12 +208,22 @@ const MustReadsWidget: React.FC<MustReadsWidgetProps> = ({ data }) => {
             </div>
 
             <div style={styles.cardActions}>
-              <button
-                onClick={() => handleOpen(item.url)}
-                style={styles.primaryButton}
-              >
-                Open
-              </button>
+              {isValidUrl(item.url) ? (
+                <button
+                  onClick={() => handleOpen(item.url)}
+                  style={styles.primaryButton}
+                >
+                  Open
+                </button>
+              ) : (
+                <button
+                  disabled
+                  style={{ ...styles.primaryButton, ...styles.disabledButton }}
+                  title="No valid link available"
+                >
+                  No link available
+                </button>
+              )}
               <button
                 onClick={() => handleExplainWhy(item.title, item.why_it_matters)}
                 style={styles.secondaryButton}
@@ -382,6 +398,11 @@ const styles = {
     borderRadius: '6px',
     cursor: 'pointer',
     transition: 'background-color 0.2s',
+  } as React.CSSProperties,
+  disabledButton: {
+    opacity: 0.5,
+    cursor: 'not-allowed',
+    backgroundColor: '#9ca3af',
   } as React.CSSProperties,
   footer: {
     borderTop: '1px solid #e5e7eb',
