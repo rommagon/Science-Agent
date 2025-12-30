@@ -15,6 +15,10 @@ jobs:
   track:
     runs-on: ubuntu-latest
 
+    # If your secrets are stored under a GitHub "Environment" (e.g., production),
+    # this line is REQUIRED. If your secrets are repo-level, you can remove it.
+    environment: production
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,7 +39,7 @@ jobs:
 
       - name: Create service account credentials file
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import os, json, pathlib
           s = os.environ["ACITRACK_GCP_SA_JSON"]
           obj = json.loads(s)  # validate JSON
@@ -48,12 +52,45 @@ jobs:
         env:
           ACITRACK_GCP_SA_JSON: ${{ secrets.ACITRACK_GCP_SA_JSON }}
 
+      - name: Debug OpenAI key presence (safe)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "OPENAI_API_KEY is NOT set (empty)"
+            exit 1
+          else
+            echo "OPENAI_API_KEY is set (length: ${#OPENAI_API_KEY})"
+          fi
+
+      - name: Sanity check OpenAI auth (safe)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import requests
+
+          k = os.getenv("OPENAI_API_KEY", "")
+          assert k and len(k) > 20, "OPENAI_API_KEY missing/too short"
+
+          r = requests.get(
+              "https://api.openai.com/v1/models",
+              headers={"Authorization": f"Bearer {k}"},
+              timeout=30,
+          )
+          print("status", r.status_code)
+          print(r.text[:200])
+          if r.status_code != 200:
+              raise SystemExit("OpenAI auth failed")
+          PY
+
       - name: Run acitrack with Drive upload
         env:
           ACITRACK_DRIVE_FOLDER_ID: ${{ secrets.ACITRACK_DRIVE_FOLDER_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          python run.py --since-days 7 --max-items-per-source 5 --upload-drive
+          python3 run.py --since-days 7 --max-items-per-source 5 --upload-drive
 
       - name: Persist snapshot state
         run: |
@@ -85,4 +122,8 @@ jobs:
             data/output/latest_report.md
             data/output/latest_new.csv
             data/output/latest_manifest.json
+            data/output/latest_must_reads.json
+            data/output/latest_must_reads.md
+            data/output/latest_summaries.json
+            data/output/latest_db.sqlite.gz
           retention-days: 90
