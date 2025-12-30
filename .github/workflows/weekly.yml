@@ -51,6 +51,7 @@ jobs:
       - name: Run acitrack with Drive upload
         env:
           ACITRACK_DRIVE_FOLDER_ID: ${{ secrets.ACITRACK_DRIVE_FOLDER_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           python run.py --since-days 7 --max-items-per-source 5 --upload-drive
 
