@@ -35,3 +35,7 @@ mcp_server/ui/node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# local must-reads debug outputs
+data/output/must_reads_ai.json
+data/output/must_reads_heuristic.json
