@@ -455,3 +455,72 @@ New Publications Per Run:
 - Non-blocking: run history failures don't stop the pipeline
 
 **Note:** This feature is part of schema v2. The first run after upgrade will migrate the database automatically.
+
+### Must Reads (MCP + OpenAI Apps SDK)
+
+AciTrack includes a "Must Reads" feature that integrates with OpenAI Custom GPT via the Model Context Protocol (MCP). This provides an interactive UI for browsing and exploring the most important recent publications.
+
+**Key Features:**
+- Intelligent ranking based on source priority, recency, and keyword relevance
+- Interactive card-based UI with Open, Explain, and Refresh actions
+- Persistent save/bookmark functionality
+- Works with SQLite database or falls back to latest run outputs
+
+**Quick Start:**
+
+```bash
+# 1. Install MCP dependency
+python3 -m pip install mcp
+
+# 2. Build the UI widget (requires Node.js/npm)
+cd mcp_server/ui
+npm install
+npm run build
+
+# 3. Run the MCP server locally
+cd ../..
+python3 -m mcp_server.server
+
+# 4. Test the tool output
+python3 << 'EOF'
+from mcp_server.must_reads import get_must_reads_from_db
+import json
+result = get_must_reads_from_db(since_days=7, limit=10)
+print(json.dumps(result, indent=2))
+EOF
+
+# 5. Test the UI locally
+cd mcp_server/ui
+npm run dev
+# Visit http://localhost:5173
+```
+
+**Integration with Custom GPT:**
+
+To use Must Reads in ChatGPT, configure your Custom GPT with the MCP server:
+
+```json
+{
+  "mcp_servers": [
+    {
+      "name": "acitrack",
+      "command": "python3",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "/path/to/acitracker_v1"
+    }
+  ]
+}
+```
+
+Then use prompts like:
+- "Show me the must-read publications from the last week"
+- "What are the top cancer research papers from the last 30 days?"
+
+**Ranking Algorithm:**
+
+Publications are scored (0-600 points) based on:
+- **Source Priority (0-100):** Nature Cancer (100), Science (90), The Lancet (80), etc.
+- **Recency (0-200):** < 7 days (200), < 14 days (150), < 30 days (100)
+- **Keywords (0-300):** screening, biomarker, early detection, ctDNA, methylation, liquid biopsy, etc.
+
+**For detailed documentation, see:** [mcp_server/README.md](mcp_server/README.md)
