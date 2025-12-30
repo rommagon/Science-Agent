@@ -4,10 +4,12 @@ This module provides optional LLM-based reranking of publications
 with strict fallback to heuristic ordering.
 """
 
+import difflib
 import json
 import logging
 import os
-from typing import List, Optional
+import re
+from typing import List, Optional, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +146,7 @@ Return ONLY valid JSON array (no markdown, no extra text):
 [
   {{
     "pub_id": "exact_id_from_above",
+    "title": "exact_title_from_above",
     "llm_score": 85,
     "llm_rank": 1,
     "llm_reason": "Novel ctDNA methylation assay with 92% sensitivity for stage I lung cancer",
@@ -154,13 +157,16 @@ Return ONLY valid JSON array (no markdown, no extra text):
   }}
 ]
 
-IMPORTANT:
+CRITICAL VALIDATION RULES:
 - Include ALL {len(publications)} publications
-- Scores 0-100
+- pub_id MUST be the EXACT string from the input (do not modify or invent)
+- title MUST be the EXACT title from the input (copy it verbatim)
+- Scores 0-100 (integers)
 - Unique ranks 1..N
 - Tags: 0-6 relevant tags from: biomarker, screening, early detection, ctDNA, methylation, liquid biopsy, clinical trial, FDA, MCED, imaging, sensitivity, specificity
 - If findings not in text, use empty array [] or ["Not enough information"]
 - Confidence: high/medium/low based on available data
+- NEVER invent or modify pub_id or title - copy them exactly as provided
 """
     return prompt
 
@@ -253,27 +259,151 @@ def rerank_with_openai(
         return None
 
 
+def _normalize_title(title: str) -> str:
+    """Normalize title for comparison (lowercase, remove extra whitespace/punctuation).
+
+    Args:
+        title: Original title string
+
+    Returns:
+        Normalized title for fuzzy matching
+    """
+    # Lowercase and strip
+    normalized = title.lower().strip()
+    # Remove multiple spaces
+    normalized = re.sub(r'\s+', ' ', normalized)
+    # Remove common punctuation but keep alphanumeric and spaces
+    normalized = re.sub(r'[^\w\s-]', '', normalized)
+    return normalized
+
+
+def _validate_rerank_item(
+    item: dict,
+    candidates_by_id: Dict[str, dict],
+    min_title_similarity: float = 0.92
+) -> tuple[bool, str]:
+    """Validate a single rerank result item.
+
+    Args:
+        item: Rerank result dict from LLM
+        candidates_by_id: Dict mapping pub_id -> publication data
+        min_title_similarity: Minimum fuzzy match ratio (0-1) for title validation
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # Check if pub_id exists
+    pub_id = item.get("pub_id")
+    if not pub_id:
+        return False, "Missing pub_id field"
+
+    if pub_id not in candidates_by_id:
+        return False, f"Unknown pub_id: {pub_id}"
+
+    # Get candidate
+    candidate = candidates_by_id[pub_id]
+    expected_title = candidate.get("title", "")
+    returned_title = item.get("title", "")
+
+    # Check if title exists in response
+    if not returned_title:
+        return False, f"Missing title field for pub_id={pub_id}"
+
+    # Normalize titles
+    expected_norm = _normalize_title(expected_title)
+    returned_norm = _normalize_title(returned_title)
+
+    # Exact match after normalization
+    if expected_norm == returned_norm:
+        return True, ""
+
+    # Fuzzy match using difflib
+    similarity = difflib.SequenceMatcher(None, expected_norm, returned_norm).ratio()
+
+    if similarity >= min_title_similarity:
+        return True, ""
+
+    # Validation failed
+    error_msg = (
+        f"Title mismatch for pub_id={pub_id[:16]}...: "
+        f"expected='{expected_title[:50]}...' "
+        f"got='{returned_title[:50]}...' "
+        f"(similarity={similarity:.2f}, threshold={min_title_similarity})"
+    )
+    return False, error_msg
+
+
 def merge_rerank_results(
     publications: List[dict], rerank_results: List[dict]
-) -> List[dict]:
-    """Merge rerank results back into publications with new structured fields.
+) -> tuple[List[dict], List[dict]]:
+    """Merge rerank results back into publications with validation.
+
+    This function validates each rerank result against the original publication
+    to prevent cross-wired LLM outputs. Only validated results are applied.
 
     Args:
         publications: Original publications with heuristic scores
         rerank_results: Rerank results from OpenAI with tags and confidence
 
     Returns:
-        Publications with merged llm_score, llm_rank, llm_reason, tags, confidence, etc.
+        Tuple of (merged_publications, validated_rerank_items):
+        - merged_publications: Publications with merged LLM data (validated only)
+        - validated_rerank_items: List of validated rerank items (for caching)
+        Publications that fail validation fall back to heuristic-only mode.
     """
-    # Create lookup dict - handle both "id" and "pub_id" keys
-    rerank_lookup = {}
-    for r in rerank_results:
-        if "pub_id" in r:
-            rerank_lookup[r["pub_id"]] = r
-        elif "id" in r:
-            rerank_lookup[r["id"]] = r
+    # Build candidates_by_id lookup for validation
+    candidates_by_id = {pub["id"]: pub for pub in publications}
 
-    # Merge results
+    # Validate and build rerank lookup
+    rerank_lookup = {}
+    duplicate_count = 0
+    dropped_count = 0
+
+    for item in rerank_results:
+        # Normalize pub_id field (handle both "pub_id" and "id")
+        pub_id = item.get("pub_id") or item.get("id")
+
+        # Validate this item
+        is_valid, error_msg = _validate_rerank_item(item, candidates_by_id)
+
+        if not is_valid:
+            dropped_count += 1
+            logger.warning("LLM rerank dropped (validation failed): %s", error_msg)
+            continue
+
+        # Check for duplicates (keep higher score)
+        if pub_id in rerank_lookup:
+            duplicate_count += 1
+            existing_score = rerank_lookup[pub_id].get("llm_score", 0)
+            new_score = item.get("llm_score", 0)
+            if new_score > existing_score:
+                logger.warning(
+                    "LLM rerank duplicate pub_id=%s (keeping higher score: %d > %d)",
+                    pub_id[:16], new_score, existing_score
+                )
+                rerank_lookup[pub_id] = item
+            else:
+                logger.warning(
+                    "LLM rerank duplicate pub_id=%s (keeping existing score: %d >= %d)",
+                    pub_id[:16], existing_score, new_score
+                )
+            continue
+
+        # Valid and unique - accept it
+        rerank_lookup[pub_id] = item
+        logger.info(
+            "LLM rerank accepted: pub_id=%s score=%d rank=%d",
+            pub_id[:16], item.get("llm_score", 0), item.get("llm_rank", 0)
+        )
+
+    # Log summary
+    if dropped_count > 0 or duplicate_count > 0:
+        logger.warning(
+            "LLM rerank validation summary: %d accepted, %d dropped (validation), %d duplicates",
+            len(rerank_lookup), dropped_count, duplicate_count
+        )
+
+    # Merge validated results into publications
     merged = []
     for pub in publications:
         pub_id = pub.get("id")
@@ -289,8 +419,7 @@ def merge_rerank_results(
             pub["llm_tags"] = llm_data.get("llm_tags", [])
             pub["llm_confidence"] = llm_data.get("confidence", "medium")
         else:
-            # No rerank data for this publication
-            logger.warning("No rerank data for pub_id=%s", pub_id)
+            # No validated rerank data - use heuristic-only mode
             pub["llm_score"] = 0
             pub["llm_rank"] = 999
             pub["llm_reason"] = ""
@@ -301,4 +430,6 @@ def merge_rerank_results(
 
         merged.append(pub)
 
-    return merged
+    # Return both merged pubs and validated items (for caching)
+    validated_items = list(rerank_lookup.values())
+    return merged, validated_items

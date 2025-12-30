@@ -288,15 +288,20 @@ def get_must_reads_from_db(
             # If reranking succeeded, merge results and cache
             if rerank_results is not None:
                 used_ai = True
-                # Store new results in cache
-                if rerank_results:
-                    store_rerank_results(rerank_results, model="gpt-4o-mini", rerank_version=RERANK_VERSION, db_path=db_path)
 
                 # Merge cached + new results
                 all_rerank_results = list(rerank_results) if rerank_results else []
+
+                # Build shortlist lookup to get title for cached items
+                shortlist_by_id = {p["id"]: p for p in shortlist}
+
                 for pub_id, cached_data in cached_results.items():
+                    # Get title from shortlist for validation
+                    title = shortlist_by_id.get(pub_id, {}).get("title", "")
                     all_rerank_results.append({
-                        "id": pub_id,
+                        "pub_id": pub_id,  # Use pub_id for validation
+                        "id": pub_id,  # Keep id for backward compatibility
+                        "title": title,  # Add title for validation
                         "llm_score": cached_data["llm_score"],
                         "llm_rank": cached_data["llm_rank"],
                         "llm_reason": cached_data["llm_reason"],
@@ -304,8 +309,16 @@ def get_must_reads_from_db(
                         "llm_findings": cached_data["llm_findings"],
                     })
 
-                # Merge rerank data into shortlist
-                shortlist = merge_rerank_results(shortlist, all_rerank_results)
+                # Merge rerank data into shortlist (with validation)
+                shortlist, validated_items = merge_rerank_results(shortlist, all_rerank_results)
+
+                # Store ONLY validated new results in cache
+                validated_new_items = [
+                    item for item in validated_items
+                    if item.get("pub_id") not in cached_results and item.get("pub_id") or item.get("id") not in cached_results
+                ]
+                if validated_new_items:
+                    store_rerank_results(validated_new_items, model="gpt-4o-mini", rerank_version=RERANK_VERSION, db_path=db_path)
 
                 # Sort by LLM rank (lower is better)
                 shortlist.sort(key=lambda x: x.get("llm_rank", 999))

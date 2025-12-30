@@ -4,8 +4,10 @@
 This script tests the must-reads functionality with and without AI reranking.
 """
 
+import difflib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -23,6 +25,63 @@ def print_separator(title: str = ""):
         print(f"{'=' * 80}\n")
     else:
         print(f"{'=' * 80}\n")
+
+
+def _normalize_for_comparison(text: str) -> str:
+    """Normalize text for comparison (lowercase, remove punctuation)."""
+    normalized = text.lower().strip()
+    normalized = re.sub(r'\s+', ' ', normalized)
+    normalized = re.sub(r'[^\w\s-]', '', normalized)
+    return normalized
+
+
+def sanity_check_must_read(mr: dict) -> tuple[bool, str]:
+    """Sanity check a must-read item for cross-wired LLM outputs.
+
+    Args:
+        mr: Must-read item dict
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # If no LLM output, skip check
+    llm_score = mr['score_components'].get('llm')
+    if llm_score is None or llm_score == 0:
+        return True, ""
+
+    # Check 1: Title should appear in explanation (if explanation contains a title)
+    title = mr.get('title', '')
+    explanation = mr.get('explanation', '')
+    why = mr.get('why_it_matters', '')
+
+    # Normalize for comparison
+    title_norm = _normalize_for_comparison(title)
+    explanation_norm = _normalize_for_comparison(explanation)
+    why_norm = _normalize_for_comparison(why)
+
+    # Check if title fragments appear in explanation/why (basic check)
+    # Split title into words and check if substantial portion appears
+    title_words = title_norm.split()
+    if len(title_words) >= 3:
+        # Check if at least 3 consecutive words from title appear in explanation or why
+        found_in_explanation = any(
+            ' '.join(title_words[i:i+3]) in explanation_norm
+            for i in range(len(title_words) - 2)
+        )
+        found_in_why = any(
+            ' '.join(title_words[i:i+3]) in why_norm
+            for i in range(len(title_words) - 2)
+        )
+
+        if not found_in_explanation and not found_in_why and explanation and why:
+            # Possible mismatch - LLM output doesn't reference this paper's title
+            error_msg = (
+                f"Possible cross-wired LLM output: title='{title[:40]}...' "
+                f"not found in explanation/why"
+            )
+            return False, error_msg
+
+    return True, ""
 
 
 def print_must_read(mr: dict, index: int):
@@ -127,6 +186,27 @@ def main():
             common = set(heuristic_ids) & set(ai_ids)
             print(f"  Publications in both: {len(common)}/{len(heuristic_ids)}")
 
+    print_separator("Sanity Checks")
+
+    # Run sanity checks on AI results
+    mismatches = []
+    for mr in result_ai['must_reads']:
+        is_valid, error_msg = sanity_check_must_read(mr)
+        if not is_valid:
+            mismatches.append({
+                "id": mr['id'],
+                "title": mr['title'],
+                "explanation": mr['explanation'],
+                "why_it_matters": mr['why_it_matters'],
+                "error": error_msg
+            })
+            print(f"❌ {error_msg}")
+
+    if mismatches:
+        print(f"\n⚠️  SANITY FAIL: {len(mismatches)} potential cross-wired LLM outputs detected")
+    else:
+        print("✅ SANITY PASS: All LLM outputs match their publications")
+
     print_separator()
 
     # Save full output to file
@@ -140,6 +220,12 @@ def main():
     with open(output_dir / "must_reads_ai.json", "w") as f:
         json.dump(result_ai, f, indent=2)
     print(f"Saved AI results to: {output_dir / 'must_reads_ai.json'}")
+
+    # Save mismatches if any
+    if mismatches:
+        with open(output_dir / "must_reads_mismatches.json", "w") as f:
+            json.dump(mismatches, f, indent=2)
+        print(f"Saved mismatches to: {output_dir / 'must_reads_mismatches.json'}")
 
     print("\nDone!")
 
