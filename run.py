@@ -528,13 +528,16 @@ def main() -> None:
         from tools.export_summaries import export_summaries
         from tools.export_db_artifact import export_db_artifact
 
+        # Use data/output/ subdirectory for all exports
+        output_subdir = outdir / "output"
+
         # Export must-reads (JSON + Markdown)
         try:
             must_reads_result = export_must_reads(
                 since_days=30,
                 limit=20,
                 use_ai=True,  # Will fall back to heuristic if no API key
-                output_dir=outdir
+                output_dir=output_subdir
             )
             logger.info("Exported must-reads: %d items (used_ai=%s)",
                        must_reads_result['count'],
@@ -545,8 +548,8 @@ def main() -> None:
         # Export summaries (requires must-reads JSON)
         try:
             summaries_result = export_summaries(
-                input_path=outdir / "latest_must_reads.json",
-                output_path=outdir / "latest_summaries.json"
+                input_path=output_subdir / "latest_must_reads.json",
+                output_path=output_subdir / "latest_summaries.json"
             )
             logger.info("Exported summaries: %d items (cached=%d, generated=%d)",
                        summaries_result['total_count'],
@@ -558,7 +561,7 @@ def main() -> None:
         # Export database artifact (gzipped)
         try:
             db_result = export_db_artifact(
-                output_path=outdir / "latest_db.sqlite.gz"
+                output_path=output_subdir / "latest_db.sqlite.gz"
             )
             if db_result['success']:
                 logger.info("Exported database: %.2f MB -> %.2f MB (%.1f%% reduction)",
