@@ -32,6 +32,16 @@ def print_must_read(mr: dict, index: int):
     print(f"   Date: {mr['published_date']}")
     print(f"   URL: {mr['url'][:60]}...")
     print(f"   Score: {mr['score_total']:.1f} (heuristic: {mr['score_components']['heuristic']:.1f}, llm: {mr['score_components'].get('llm', 'N/A')})")
+
+    # Show tags and confidence if available
+    tags = mr.get('tags', [])
+    confidence = mr.get('confidence')
+    if tags:
+        tags_str = ', '.join(tags)
+        print(f"   Tags: {tags_str}")
+    if confidence:
+        print(f"   Confidence: {confidence}")
+
     print(f"   Explanation: {mr['explanation']}")
     print(f"   Why: {mr['why_it_matters'][:100]}...")
     if mr['key_findings']:
@@ -48,7 +58,7 @@ def main():
 
     result_heuristic = get_must_reads_from_db(
         since_days=30,
-        limit=5,
+        limit=10,
         use_ai=False,
     )
 
@@ -61,7 +71,7 @@ def main():
     print()
 
     if result_heuristic['must_reads']:
-        print("Top 5 must-reads (heuristic):")
+        print("Top 10 must-reads (heuristic):")
         for i, mr in enumerate(result_heuristic['must_reads'], 1):
             print_must_read(mr, i)
     else:
@@ -79,7 +89,7 @@ def main():
 
     result_ai = get_must_reads_from_db(
         since_days=30,
-        limit=5,
+        limit=10,
         use_ai=True,
         rerank_max_candidates=20,  # Use smaller candidate set for testing
     )
@@ -93,7 +103,7 @@ def main():
     print()
 
     if result_ai['must_reads']:
-        print("Top 5 must-reads (AI-reranked):")
+        print("Top 10 must-reads (AI-reranked):")
         for i, mr in enumerate(result_ai['must_reads'], 1):
             print_must_read(mr, i)
     else:
@@ -107,8 +117,8 @@ def main():
         ai_ids = [mr['id'] for mr in result_ai['must_reads']]
 
         print("Order comparison:")
-        print(f"  Heuristic top 5 IDs: {heuristic_ids}")
-        print(f"  AI top 5 IDs:        {ai_ids}")
+        print(f"  Heuristic top 10 IDs: {heuristic_ids}")
+        print(f"  AI top 10 IDs:        {ai_ids}")
 
         if heuristic_ids == ai_ids:
             print("\n  Rankings are IDENTICAL (AI not used or no change)")
