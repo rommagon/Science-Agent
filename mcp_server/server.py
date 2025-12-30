@@ -57,6 +57,18 @@ async def list_tools() -> list[Tool]:
                         "minimum": 1,
                         "maximum": 50,
                     },
+                    "use_ai": {
+                        "type": "boolean",
+                        "description": "Use AI reranking if OPENAI_API_KEY is available (default: true)",
+                        "default": True,
+                    },
+                    "rerank_max_candidates": {
+                        "type": "integer",
+                        "description": "Maximum candidates to pass to AI reranker (default: 50)",
+                        "default": 50,
+                        "minimum": 10,
+                        "maximum": 200,
+                    },
                 },
                 "required": [],
             },
@@ -81,17 +93,23 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     if name == "get_must_reads":
         since_days = arguments.get("since_days", 7)
         limit = arguments.get("limit", 10)
+        use_ai = arguments.get("use_ai", True)
+        rerank_max_candidates = arguments.get("rerank_max_candidates", 50)
 
         logger.info(
-            "get_must_reads called with since_days=%d, limit=%d",
+            "get_must_reads called with since_days=%d, limit=%d, use_ai=%s, rerank_max_candidates=%d",
             since_days,
             limit,
+            use_ai,
+            rerank_max_candidates,
         )
 
         # Get must-reads data
         result = get_must_reads_from_db(
             since_days=since_days,
             limit=limit,
+            use_ai=use_ai,
+            rerank_max_candidates=rerank_max_candidates,
         )
 
         # Return as structured content for UI rendering

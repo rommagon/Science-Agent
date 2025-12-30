@@ -193,13 +193,17 @@ def get_must_reads_from_db(
     db_path: str = "data/db/acitrack.db",
     since_days: int = 7,
     limit: int = 10,
+    use_ai: bool = True,
+    rerank_max_candidates: int = 50,
 ) -> dict:
-    """Retrieve must-reads from SQLite database.
+    """Retrieve must-reads from SQLite database with optional AI reranking.
 
     Args:
         db_path: Path to SQLite database
         since_days: Number of days to look back
         limit: Maximum number of must-reads to return
+        use_ai: Whether to use AI reranking (default: True, requires OPENAI_API_KEY)
+        rerank_max_candidates: Max candidates to pass to AI reranker (default: 50)
 
     Returns:
         Dictionary with must_reads list and metadata
@@ -207,9 +211,13 @@ def get_must_reads_from_db(
     db_file = Path(db_path)
     if not db_file.exists():
         logger.warning("Database not found at %s, using fallback", db_path)
-        return _fallback_must_reads(since_days, limit)
+        return _fallback_must_reads(since_days, limit, use_ai, rerank_max_candidates)
 
     try:
+        # Import rerank modules
+        from mcp_server.ai_reranker import rerank_with_openai, merge_rerank_results
+        from mcp_server.rerank_cache import get_cached_rerank, store_rerank_results, RERANK_VERSION
+
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -233,7 +241,7 @@ def get_must_reads_from_db(
         rows = cursor.fetchall()
         total_candidates = len(rows)
 
-        # Rank publications
+        # STEP 1: Apply heuristic ranking to all candidates
         ranked_pubs = []
         for row in rows:
             score, reason = _compute_rank_score(
@@ -244,63 +252,130 @@ def get_must_reads_from_db(
                 published_date=row["published_date"] or "",
             )
 
-            key_findings = _extract_key_findings(row["summary"] or "")
-            why_it_matters = _generate_why_it_matters(
-                row["title"] or "", row["summary"] or "", reason
-            )
+            ranked_pubs.append({
+                "id": row["id"],
+                "title": row["title"] or "Untitled",
+                "published_date": row["published_date"] or "",
+                "source": row["source"] or "",
+                "venue": row["venue"] or "",
+                "url": row["url"] or "",
+                "raw_text": row["raw_text"] or "",
+                "summary": row["summary"] or "",
+                "heuristic_score": score,
+                "heuristic_reason": reason,
+            })
 
-            must_read = MustRead(
-                id=row["id"],
-                title=row["title"] or "Untitled",
-                published_date=row["published_date"] or "",
-                source=row["source"] or "",
-                venue=row["venue"] or "",
-                url=row["url"] or "",
-                why_it_matters=why_it_matters,
-                key_findings=key_findings,
-                rank_score=score,
-                rank_reason=reason,
-            )
-            ranked_pubs.append(must_read)
+        # Sort by heuristic score and take top N candidates for reranking
+        ranked_pubs.sort(key=lambda x: x["heuristic_score"], reverse=True)
+        shortlist = ranked_pubs[:rerank_max_candidates]
 
-        # Sort by score (descending) and take top N
-        ranked_pubs.sort(key=lambda x: x.rank_score, reverse=True)
-        top_must_reads = ranked_pubs[:limit]
+        # STEP 2: AI reranking (optional, with caching)
+        used_ai = False
+        if use_ai and shortlist:
+            # Check cache first
+            shortlist_ids = [p["id"] for p in shortlist]
+            cached_results = get_cached_rerank(shortlist_ids, RERANK_VERSION, db_path)
+
+            # Separate cached and uncached
+            uncached_pubs = [p for p in shortlist if p["id"] not in cached_results]
+
+            # Rerank uncached publications
+            rerank_results = []
+            if uncached_pubs:
+                logger.info("Calling AI reranker for %d publications", len(uncached_pubs))
+                rerank_results = rerank_with_openai(uncached_pubs)
+
+            # If reranking succeeded, merge results and cache
+            if rerank_results is not None:
+                used_ai = True
+                # Store new results in cache
+                if rerank_results:
+                    store_rerank_results(rerank_results, model="gpt-4o-mini", rerank_version=RERANK_VERSION, db_path=db_path)
+
+                # Merge cached + new results
+                all_rerank_results = list(rerank_results) if rerank_results else []
+                for pub_id, cached_data in cached_results.items():
+                    all_rerank_results.append({
+                        "id": pub_id,
+                        "llm_score": cached_data["llm_score"],
+                        "llm_rank": cached_data["llm_rank"],
+                        "llm_reason": cached_data["llm_reason"],
+                        "llm_why": cached_data["llm_why"],
+                        "llm_findings": cached_data["llm_findings"],
+                    })
+
+                # Merge rerank data into shortlist
+                shortlist = merge_rerank_results(shortlist, all_rerank_results)
+
+                # Sort by LLM rank (lower is better)
+                shortlist.sort(key=lambda x: x.get("llm_rank", 999))
+            else:
+                logger.info("AI reranking not available, using heuristic scores")
+
+        # STEP 3: Take top N results
+        top_results = shortlist[:limit]
 
         conn.close()
 
+        # STEP 4: Format output
+        must_reads_output = []
+        for pub in top_results:
+            # Calculate total score
+            heuristic_score = pub.get("heuristic_score", 0)
+            llm_score = pub.get("llm_score", 0)
+            total_score = heuristic_score + llm_score
+
+            # Determine explanation
+            if used_ai and llm_score > 0:
+                why_it_matters = pub.get("llm_why", "") or _generate_why_it_matters(
+                    pub.get("title", ""), pub.get("summary", ""), pub.get("heuristic_reason", "")
+                )
+                key_findings = pub.get("llm_findings", []) or _extract_key_findings(pub.get("summary", ""))
+            else:
+                why_it_matters = _generate_why_it_matters(
+                    pub.get("title", ""), pub.get("summary", ""), pub.get("heuristic_reason", "")
+                )
+                key_findings = _extract_key_findings(pub.get("summary", ""))
+
+            must_reads_output.append({
+                "id": pub.get("id", ""),
+                "title": pub.get("title", ""),
+                "published_date": pub.get("published_date", ""),
+                "source": pub.get("source", ""),
+                "venue": pub.get("venue", ""),
+                "url": pub.get("url", ""),
+                "score_total": total_score,
+                "score_components": {
+                    "heuristic": heuristic_score,
+                    "llm": llm_score if used_ai else None,
+                },
+                "explanation": pub.get("llm_reason", "") if used_ai else pub.get("heuristic_reason", ""),
+                "why_it_matters": why_it_matters,
+                "key_findings": key_findings,
+            })
+
         return {
-            "must_reads": [
-                {
-                    "id": mr.id,
-                    "title": mr.title,
-                    "published_date": mr.published_date,
-                    "source": mr.source,
-                    "venue": mr.venue,
-                    "url": mr.url,
-                    "why_it_matters": mr.why_it_matters,
-                    "key_findings": mr.key_findings,
-                    "rank_score": mr.rank_score,
-                    "rank_reason": mr.rank_reason,
-                }
-                for mr in top_must_reads
-            ],
+            "must_reads": must_reads_output,
             "generated_at": datetime.now().isoformat(),
             "window_days": since_days,
             "total_candidates": total_candidates,
+            "used_ai": used_ai,
+            "rerank_version": RERANK_VERSION if used_ai else None,
         }
 
     except Exception as e:
         logger.error("Error retrieving must-reads from database: %s", e)
-        return _fallback_must_reads(since_days, limit)
+        return _fallback_must_reads(since_days, limit, use_ai, rerank_max_candidates)
 
 
-def _fallback_must_reads(since_days: int, limit: int) -> dict:
+def _fallback_must_reads(since_days: int, limit: int, use_ai: bool = True, rerank_max_candidates: int = 50) -> dict:
     """Fallback to latest run outputs when DB is not available.
 
     Args:
         since_days: Number of days to look back
         limit: Maximum number of must-reads to return
+        use_ai: Whether to use AI reranking (ignored in fallback for simplicity)
+        rerank_max_candidates: Max candidates for reranking (ignored in fallback)
 
     Returns:
         Dictionary with must_reads list and metadata
@@ -380,16 +455,22 @@ def _fallback_must_reads(since_days: int, limit: int) -> dict:
                     "source": mr.source,
                     "venue": mr.venue,
                     "url": mr.url,
+                    "score_total": mr.rank_score,
+                    "score_components": {
+                        "heuristic": mr.rank_score,
+                        "llm": None,
+                    },
+                    "explanation": mr.rank_reason,
                     "why_it_matters": mr.why_it_matters,
                     "key_findings": mr.key_findings,
-                    "rank_score": mr.rank_score,
-                    "rank_reason": mr.rank_reason,
                 }
                 for mr in top_must_reads
             ],
             "generated_at": datetime.now().isoformat(),
             "window_days": since_days,
             "total_candidates": total_candidates,
+            "used_ai": False,
+            "rerank_version": None,
         }
 
     except Exception as e:
@@ -411,4 +492,6 @@ def _empty_must_reads(since_days: int) -> dict:
         "generated_at": datetime.now().isoformat(),
         "window_days": since_days,
         "total_candidates": 0,
+        "used_ai": False,
+        "rerank_version": None,
     }
