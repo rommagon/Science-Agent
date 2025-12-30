@@ -317,25 +317,45 @@ def get_must_reads_from_db(
 
         conn.close()
 
-        # STEP 4: Format output
+        # STEP 4: Format output with scoring blend
         must_reads_output = []
         for pub in top_results:
-            # Calculate total score
+            # Scoring blend: heuristic + scaled LLM score
             heuristic_score = pub.get("heuristic_score", 0)
             llm_score = pub.get("llm_score", 0)
-            total_score = heuristic_score + llm_score
 
-            # Determine explanation
+            # Blend logic:
+            # - If LLM says irrelevant (score < 10), strongly demote regardless of heuristic
+            # - Otherwise, combine scores with LLM weighted more heavily
+            if used_ai and llm_score > 0:
+                if llm_score < 10:
+                    # LLM says irrelevant - strongly demote
+                    total_score = llm_score
+                else:
+                    # Blend: 40% heuristic + 60% LLM (scaled to match heuristic range)
+                    # LLM score is 0-100, scale to match heuristic 0-600 range
+                    llm_score_scaled = (llm_score / 100.0) * 600
+                    total_score = (0.4 * heuristic_score) + (0.6 * llm_score_scaled)
+            else:
+                total_score = heuristic_score
+
+            # Determine explanation and fields
             if used_ai and llm_score > 0:
                 why_it_matters = pub.get("llm_why", "") or _generate_why_it_matters(
                     pub.get("title", ""), pub.get("summary", ""), pub.get("heuristic_reason", "")
                 )
                 key_findings = pub.get("llm_findings", []) or _extract_key_findings(pub.get("summary", ""))
+                explanation = pub.get("llm_reason", "")
+                tags = pub.get("llm_tags", [])
+                confidence = pub.get("llm_confidence", "medium")
             else:
                 why_it_matters = _generate_why_it_matters(
                     pub.get("title", ""), pub.get("summary", ""), pub.get("heuristic_reason", "")
                 )
                 key_findings = _extract_key_findings(pub.get("summary", ""))
+                explanation = pub.get("heuristic_reason", "")
+                tags = []
+                confidence = None
 
             must_reads_output.append({
                 "id": pub.get("id", ""),
@@ -349,9 +369,11 @@ def get_must_reads_from_db(
                     "heuristic": heuristic_score,
                     "llm": llm_score if used_ai else None,
                 },
-                "explanation": pub.get("llm_reason", "") if used_ai else pub.get("heuristic_reason", ""),
+                "explanation": explanation,
                 "why_it_matters": why_it_matters,
                 "key_findings": key_findings,
+                "tags": tags,
+                "confidence": confidence,
             })
 
         return {
@@ -463,6 +485,8 @@ def _fallback_must_reads(since_days: int, limit: int, use_ai: bool = True, reran
                     "explanation": mr.rank_reason,
                     "why_it_matters": mr.why_it_matters,
                     "key_findings": mr.key_findings,
+                    "tags": [],
+                    "confidence": None,
                 }
                 for mr in top_must_reads
             ],
