@@ -27,6 +27,7 @@ MIME_TYPES = {
     ".md": "text/markdown",
     ".csv": "text/csv",
     ".json": "application/json",
+    ".gz": "application/gzip",
 }
 
 
@@ -182,6 +183,11 @@ def upload_latest_outputs(folder_id: str, outdir: str = "data") -> dict:
         ("latest_report.md", output_dir / "latest_report.md"),
         ("latest_new.csv", output_dir / "latest_new.csv"),
         ("latest_manifest.json", output_dir / "latest_manifest.json"),
+        # Must-reads + summaries artifacts
+        ("latest_must_reads.json", output_dir / "latest_must_reads.json"),
+        ("latest_must_reads.md", output_dir / "latest_must_reads.md"),
+        ("latest_summaries.json", output_dir / "latest_summaries.json"),
+        ("latest_db.sqlite.gz", output_dir / "latest_db.sqlite.gz"),
     ]
 
     # Create Drive service

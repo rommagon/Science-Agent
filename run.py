@@ -521,6 +521,58 @@ def main() -> None:
     logger.info("Phase 6: Creating latest pointers")
     create_latest_pointers(run_id, outdir)
 
+    # Phase 6.5: Export Drive artifacts (must-reads + summaries + db)
+    logger.info("Phase 6.5: Exporting Drive artifacts (must-reads + summaries + db)")
+    try:
+        from tools.export_must_reads import export_must_reads
+        from tools.export_summaries import export_summaries
+        from tools.export_db_artifact import export_db_artifact
+
+        # Export must-reads (JSON + Markdown)
+        try:
+            must_reads_result = export_must_reads(
+                since_days=30,
+                limit=20,
+                use_ai=True,  # Will fall back to heuristic if no API key
+                output_dir=outdir
+            )
+            logger.info("Exported must-reads: %d items (used_ai=%s)",
+                       must_reads_result['count'],
+                       must_reads_result['used_ai'])
+        except Exception as e:
+            logger.warning("Failed to export must-reads (continuing): %s", e)
+
+        # Export summaries (requires must-reads JSON)
+        try:
+            summaries_result = export_summaries(
+                input_path=outdir / "latest_must_reads.json",
+                output_path=outdir / "latest_summaries.json"
+            )
+            logger.info("Exported summaries: %d items (cached=%d, generated=%d)",
+                       summaries_result['total_count'],
+                       summaries_result['cached_count'],
+                       summaries_result['generated_count'])
+        except Exception as e:
+            logger.warning("Failed to export summaries (continuing): %s", e)
+
+        # Export database artifact (gzipped)
+        try:
+            db_result = export_db_artifact(
+                output_path=outdir / "latest_db.sqlite.gz"
+            )
+            if db_result['success']:
+                logger.info("Exported database: %.2f MB -> %.2f MB (%.1f%% reduction)",
+                           db_result['original_size_mb'],
+                           db_result['compressed_size_mb'],
+                           db_result['compression_ratio'])
+            else:
+                logger.warning("Database export skipped: %s", db_result.get('error', 'Unknown'))
+        except Exception as e:
+            logger.warning("Failed to export database (continuing): %s", e)
+
+    except Exception as e:
+        logger.warning("Phase 6.5 failed (non-blocking): %s", e)
+
     # Phase 7 (optional): Upload to Google Drive
     drive_upload_success = True
     if args.upload_drive:
