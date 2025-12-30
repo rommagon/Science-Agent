@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Must Reads Widget - Development</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { MustReadsWidget } from './src/index.tsx';
+
+      // Mock OpenAI Apps SDK for local development
+      window.openai = {
+        openExternal: ({ href }) => {
+          console.log('openExternal:', href);
+          window.open(href, '_blank');
+        },
+        sendFollowUpMessage: ({ prompt }) => {
+          console.log('sendFollowUpMessage:', prompt);
+          alert(`Follow-up prompt: ${prompt}`);
+        },
+        callTool: (toolName, params) => {
+          console.log('callTool:', toolName, params);
+          alert(`Calling tool ${toolName} with params: ${JSON.stringify(params)}`);
+        },
+        setWidgetState: (state) => {
+          console.log('setWidgetState:', state);
+          localStorage.setItem('widgetState', JSON.stringify(state));
+          return Promise.resolve();
+        },
+        getWidgetState: () => {
+          console.log('getWidgetState');
+          const state = localStorage.getItem('widgetState');
+          return Promise.resolve(state ? JSON.parse(state) : {});
+        },
+      };
+
+      // Sample data for development
+      const sampleData = {
+        must_reads: [
+          {
+            id: '1',
+            title: 'Novel biomarker for early cancer detection shows promise',
+            published_date: '2025-12-28',
+            source: 'Nature Cancer',
+            venue: 'Nature Cancer',
+            url: 'https://example.com/article1',
+            why_it_matters: 'This study demonstrates a new approach to early detection using liquid biopsy.',
+            key_findings: [
+              'Sensitivity of 95% in early-stage cancers',
+              'Specificity exceeds 98% in validation cohort',
+              'Cost-effective compared to existing methods'
+            ],
+            rank_score: 450,
+            rank_reason: 'high-priority source (Nature Cancer); very recent (< 7 days); high keyword relevance (3 matches)',
+          },
+          {
+            id: '2',
+            title: 'Methylation patterns predict cancer risk years in advance',
+            published_date: '2025-12-25',
+            source: 'Science',
+            venue: 'Science',
+            url: 'https://example.com/article2',
+            why_it_matters: 'This study identifies methylation signatures that precede cancer diagnosis by 2-5 years.',
+            key_findings: [
+              'Identified 500+ differentially methylated regions',
+              'Machine learning model achieves AUC of 0.92'
+            ],
+            rank_score: 400,
+            rank_reason: 'high-priority source (Science); recent (< 14 days); moderate keyword relevance (2 matches)',
+          },
+        ],
+        generated_at: '2025-12-30T10:30:00',
+        window_days: 7,
+        total_candidates: 50,
+      };
+
+      const root = createRoot(document.getElementById('root'));
+      root.render(React.createElement(MustReadsWidget, { data: sampleData }));
+    </script>
+  </body>
+</html>
