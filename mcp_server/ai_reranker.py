@@ -15,162 +15,82 @@ logger = logging.getLogger(__name__)
 
 # OpenAI model for reranking
 DEFAULT_MODEL = "gpt-4o-mini"
-MAX_TEXT_SNIPPET = 1200  # Max characters from raw_text (increased for better context)
+MAX_TEXT_SNIPPET = 300  # Reduced to minimize token usage and prevent truncation
+MAX_RERANK_CANDIDATES = 25  # Reduced from 50 to ensure reliable parsing
 
 
 def _prepare_rerank_input(publications: List[dict]) -> List[dict]:
-    """Prepare publications for reranking with safe truncation.
+    """Prepare publications for reranking with MINIMAL data to prevent truncation.
 
     Args:
         publications: List of publication dicts with heuristic scores
 
     Returns:
-        List of minimal publication dicts for LLM input with confidence indicators
+        List of minimal publication dicts for LLM input (id, title, source only)
     """
     rerank_input = []
     for pub in publications:
-        # Prepare text snippet with priority: summary > raw_text > empty
+        # Get text snippet - prefer summary, fallback to raw_text
         text_snippet = ""
-        has_summary = False
-        has_raw_text = False
-
         if pub.get("summary") and pub["summary"] != "No summary available.":
             text_snippet = pub["summary"][:MAX_TEXT_SNIPPET]
-            has_summary = True
         elif pub.get("raw_text"):
             text_snippet = pub["raw_text"][:MAX_TEXT_SNIPPET]
-            has_raw_text = True
 
-        # Determine confidence based on available data
-        if has_summary or (has_raw_text and len(pub.get("raw_text", "")) > 300):
-            confidence = "high"
-        elif has_raw_text:
-            confidence = "medium"
-        else:
-            confidence = "low"
-
+        # Minimal input to reduce tokens
         rerank_input.append(
             {
                 "id": pub.get("id", ""),
-                "title": pub.get("title", ""),
-                "venue": pub.get("venue", ""),
+                "title": pub.get("title", "")[:250],  # Truncate long titles
                 "source": pub.get("source", ""),
-                "published_date": pub.get("published_date", ""),
-                "url": pub.get("url", ""),
-                "text_snippet": text_snippet,
-                "has_abstract": has_summary or has_raw_text,
+                "text": text_snippet,  # Short snippet only
             }
         )
     return rerank_input
 
 
 def _build_rerank_prompt(publications: List[dict]) -> str:
-    """Build the improved reranking prompt for OpenAI with SpotItEarly rubric.
+    """Build MINIMAL reranking prompt requesting only ranked IDs.
 
     Args:
-        publications: List of publication dicts
+        publications: List of publication dicts (id, title, source, text)
 
     Returns:
-        Prompt string with strict scoring rubric
+        Concise prompt requesting JSON array of ranked IDs
     """
-    pub_summaries = []
+    pub_list = []
     for i, pub in enumerate(publications, 1):
-        abstract_indicator = " [Has abstract]" if pub.get('has_abstract') else " [Title/venue only]"
-        pub_summaries.append(
-            f"{i}. ID: {pub['id']}{abstract_indicator}\n"
+        text_preview = pub.get('text', '')[:200] if pub.get('text') else '[No abstract]'
+        pub_list.append(
+            f"{i}. {pub['id']}\n"
             f"   Title: {pub['title']}\n"
-            f"   Venue: {pub['venue']}\n"
             f"   Source: {pub['source']}\n"
-            f"   Date: {pub['published_date']}\n"
-            f"   URL: {pub.get('url', 'N/A')}\n"
-            f"   Text: {pub['text_snippet'][:400] if pub['text_snippet'] else 'Not available'}\n"
+            f"   Text: {text_preview}\n"
         )
 
-    publications_text = "\n".join(pub_summaries)
+    publications_text = "\n".join(pub_list)
 
-    prompt = f"""You are an expert evaluator for SpotItEarly, a company focused on early cancer detection and screening innovation.
+    prompt = f"""Rank these {len(publications)} cancer research publications by relevance to early cancer detection and screening.
 
-Your task: Rank {len(publications)} publications by relevance to SpotItEarly's mission using this rubric:
-
-**SCORING RUBRIC (0-100):**
-
-HIGH PRIORITY (70-100 points):
-- Early cancer detection/screening methods (liquid biopsy, imaging, biomarkers)
-- Novel diagnostic biomarkers with clinical validation
-- Prospective clinical trials for early-stage cancer detection
-- Cell-free DNA, ctDNA, methylation-based detection
-- Multi-cancer early detection (MCED) technologies
-- Screening effectiveness studies with strong evidence (sensitivity/specificity data)
-- Translational/commercial potential for real-world deployment
-
-MEDIUM PRIORITY (40-69 points):
-- Cancer biology relevant to early detection mechanisms
-- Biomarker discovery (pre-clinical or small cohorts)
-- Retrospective studies on early detection methods
-- Risk stratification or prediction models
-- Minimal residual disease (MRD) monitoring
-
-LOW PRIORITY (10-39 points):
-- Treatment-focused (immunotherapy, chemotherapy, surgery) without detection angle
-- Late-stage cancer research
-- Cancer prevention (lifestyle, diet) without diagnostic innovation
-- General cancer epidemiology
-
-DEPRIORITIZE (0-9 points):
-- Non-cancer biology (plant biology, ecology, veterinary, non-human)
-- Unrelated medical fields (cardiology, neurology without cancer connection)
-- Pure methodology papers without cancer application
-- Editorials, letters, non-research articles
-
-**EVIDENCE STRENGTH MULTIPLIERS:**
-- Large prospective cohort (>1000 patients): +10 points
-- Clinical validation data (sensitivity/specificity): +10 points
-- FDA/regulatory pathway mentioned: +5 points
-- Multi-center trial: +5 points
-
-**CRITICAL RULES:**
-1. DO NOT HALLUCINATE: If abstract/text is missing or findings are unclear, state "Not enough information" in findings.
-2. If title/venue suggests irrelevant domain (e.g., plant biology, animal ecology), score 0-5 regardless of keywords.
-3. Recency bonus: Publications from last 30 days get +5 points.
-4. Confidence:
-   - "high" if abstract available and findings clearly stated
-   - "medium" if title/venue only but domain is relevant
-   - "low" if title-only and unclear relevance
-
-**OUTPUT FORMAT (STRICT JSON):**
+SpotItEarly Priorities:
+• HIGH: Early detection methods (liquid biopsy, ctDNA, methylation, biomarkers, MCED, screening trials)
+• MEDIUM: Cancer biology, biomarker discovery, risk models
+• LOW: Treatment-only research, late-stage cancer, prevention without diagnostics
+• SKIP: Non-cancer biology, unrelated medical fields
 
 Publications:
 {publications_text}
 
-Return ONLY valid JSON object with a "results" array (no markdown, no extra text):
+Return ONLY this JSON (no markdown, no explanation):
 {{
-  "results": [
-    {{
-      "pub_id": "exact_id_from_above",
-      "title": "exact_title_from_above",
-      "llm_score": 85,
-      "llm_rank": 1,
-      "llm_reason": "Novel ctDNA methylation assay with 92% sensitivity for stage I lung cancer",
-      "llm_why_it_matters": "This study validates a multi-cancer early detection platform in a prospective cohort of 10,000 patients, demonstrating clinical utility for population screening.",
-      "llm_key_findings": ["Sensitivity: 92% for stage I cancers", "Specificity: 96% in validation cohort", "Cost: $500 per test"],
-      "llm_tags": ["liquid biopsy", "ctDNA", "early detection", "screening", "clinical validation", "lung cancer"],
-      "confidence": "high"
-    }}
-  ]
+  "ranked_ids": ["id_of_most_relevant", "id_of_second", ..., "id_of_least_relevant"]
 }}
 
-CRITICAL VALIDATION RULES:
-- Include ALL {len(publications)} publications in the "results" array
-- pub_id MUST be the EXACT string from the input (do not modify or invent)
-- title MUST be the EXACT title from the input (copy it verbatim)
-- Scores 0-100 (integers)
-- Unique ranks 1..N
-- Keep llm_reason and llm_why_it_matters SHORT (max 200 chars each) to prevent truncation
-- Tags: 0-6 relevant tags from: biomarker, screening, early detection, ctDNA, methylation, liquid biopsy, clinical trial, FDA, MCED, imaging, sensitivity, specificity
-- If findings not in text, use empty array [] or ["Not enough information"]
-- Confidence: high/medium/low based on available data
-- NEVER invent or modify pub_id or title - copy them exactly as provided
-"""
+Rules:
+- Include ALL {len(publications)} IDs in ranked_ids array
+- IDs must be EXACT strings from above (copy-paste)
+- Order from most to least relevant
+- No extra fields, no explanations"""
     return prompt
 
 
@@ -214,107 +134,96 @@ def rerank_with_openai(
             len(publications),
         )
 
-        # Call OpenAI API with JSON mode and low temperature
+        # Call OpenAI API with strict JSON mode and minimal tokens
         response = client.chat.completions.create(
             model=model,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are an expert evaluator for SpotItEarly, focused on early cancer detection and screening. Return ONLY valid JSON with no additional text or markdown.",
+                    "content": "You are a cancer research expert. Return ONLY valid JSON with no markdown.",
                 },
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.1,  # Low temperature for consistent, deterministic output
-            max_tokens=4000,  # Reduced to prevent truncation (50 pubs * ~80 tokens each)
-            response_format={"type": "json_object"},  # STRICT JSON MODE
+            temperature=0.1,
+            max_tokens=800,  # Minimal: 25 IDs * ~30 chars + overhead
+            response_format={"type": "json_object"},
         )
 
         # Parse response
         response_text = response.choices[0].message.content.strip()
 
-        # Try to parse JSON
+        # Try to parse the minimal JSON response
         try:
-            rerank_results = _parse_rerank_response(response_text)
-        except json.JSONDecodeError as e:
+            parsed = json.loads(response_text)
+            ranked_ids = parsed.get("ranked_ids", [])
+
+            if not ranked_ids or not isinstance(ranked_ids, list):
+                raise ValueError("Response missing 'ranked_ids' array")
+
+            # Convert minimal response to full format for backward compatibility
+            rerank_results = _convert_ranked_ids_to_results(
+                ranked_ids, publications
+            )
+
+            logger.info(
+                "Successfully reranked %d publications with OpenAI",
+                len(rerank_results),
+            )
+            return rerank_results
+
+        except (json.JSONDecodeError, ValueError) as e:
             # RETRY ONCE with repair prompt
             logger.warning(
-                "Failed to parse OpenAI JSON response (attempt 1/2): %s",
-                e,
+                "Failed to parse OpenAI response (attempt 1/2): %s", e
             )
             logger.warning(
-                "Response preview (first 400 chars): %s...",
-                response_text[:400],
+                "Response preview: %s...", response_text[:300]
             )
             logger.info("Retrying with repair prompt")
 
-            # Build repair prompt
-            repair_prompt = f"""Your previous output was invalid JSON and could not be parsed.
-
-Error: {e}
-
-Please re-output the rerank results as VALID JSON ONLY. No markdown, no explanation.
-
-Expected format:
+            repair_prompt = f"""Your previous output was invalid. Return ONLY this JSON:
 {{
-  "results": [
-    {{
-      "pub_id": "...",
-      "title": "...",
-      "llm_score": 85,
-      "llm_rank": 1,
-      "llm_reason": "... (SHORT, max 200 chars)",
-      "llm_why_it_matters": "... (SHORT, max 200 chars)",
-      "llm_key_findings": [...],
-      "llm_tags": [...],
-      "confidence": "high"
-    }}
-  ]
+  "ranked_ids": ["exact_id_1", "exact_id_2", ...]
 }}
 
-Include all {len(publications)} publications from the original request in the "results" array."""
+Include all {len(publications)} IDs from the original list in ranked order."""
 
-            # Retry call
             retry_response = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": "Return ONLY valid JSON. No markdown, no explanation.",
-                    },
+                    {"role": "system", "content": "Return ONLY valid JSON."},
                     {"role": "user", "content": prompt},
                     {"role": "assistant", "content": response_text},
                     {"role": "user", "content": repair_prompt},
                 ],
-                temperature=0.0,  # Zero temperature for repair
-                max_tokens=4000,
+                temperature=0.0,
+                max_tokens=800,
                 response_format={"type": "json_object"},
             )
 
             retry_text = retry_response.choices[0].message.content.strip()
 
             try:
-                rerank_results = _parse_rerank_response(retry_text)
-                logger.info("Successfully parsed JSON on retry (attempt 2/2)")
-            except json.JSONDecodeError as retry_error:
-                logger.error(
-                    "Failed to parse JSON on retry (attempt 2/2): %s",
-                    retry_error,
+                parsed = json.loads(retry_text)
+                ranked_ids = parsed.get("ranked_ids", [])
+
+                if not ranked_ids:
+                    raise ValueError("Retry missing 'ranked_ids'")
+
+                rerank_results = _convert_ranked_ids_to_results(
+                    ranked_ids, publications
                 )
+
+                logger.info("Successfully parsed on retry (attempt 2/2)")
+                return rerank_results
+
+            except (json.JSONDecodeError, ValueError) as retry_error:
                 logger.error(
-                    "Retry response preview (first 400 chars): %s...",
-                    retry_text[:400],
+                    "Failed on retry (attempt 2/2): %s", retry_error
                 )
+                logger.error("Response: %s...", retry_text[:300])
                 logger.error("Falling back to heuristic ranking")
                 return None
-
-        if not isinstance(rerank_results, list):
-            logger.error("OpenAI response is not a list: %s", response_text[:200])
-            return None
-
-        logger.info(
-            "Successfully reranked %d publications with OpenAI", len(rerank_results)
-        )
-        return rerank_results
 
     except ImportError:
         logger.warning("OpenAI library not installed, skipping LLM rerank")
@@ -324,42 +233,46 @@ Include all {len(publications)} publications from the original request in the "r
         return None
 
 
-def _parse_rerank_response(response_text: str) -> List[dict]:
-    """Parse OpenAI rerank response, handling various formats.
+def _convert_ranked_ids_to_results(
+    ranked_ids: List[str], publications: List[dict]
+) -> List[dict]:
+    """Convert minimal ranked_ids response to full results format.
 
     Args:
-        response_text: Raw response text from OpenAI
+        ranked_ids: List of publication IDs in ranked order
+        publications: Original publication dicts with full data
 
     Returns:
-        List of rerank result dicts
-
-    Raises:
-        json.JSONDecodeError: If response is not valid JSON
+        List of results with llm_score, llm_rank for backward compatibility
     """
-    # Remove markdown code blocks if present
-    if response_text.startswith("```"):
-        lines = response_text.split("\n")
-        response_text = "\n".join(
-            line for line in lines if not line.startswith("```")
-        )
+    # Build lookup by ID
+    pub_by_id = {pub["id"]: pub for pub in publications}
 
-    # Parse JSON
-    parsed = json.loads(response_text)
+    # Convert to full format
+    results = []
+    for rank, pub_id in enumerate(ranked_ids, 1):
+        if pub_id not in pub_by_id:
+            logger.warning("Ranked ID not in original list: %s", pub_id[:16])
+            continue
 
-    # Handle both array and object with "results" or similar key
-    if isinstance(parsed, dict):
-        # Try common keys for array wrapper
-        for key in ["results", "rerank_results", "publications", "data"]:
-            if key in parsed and isinstance(parsed[key], list):
-                return parsed[key]
-        # If no recognized key, raise error
-        raise json.JSONDecodeError(
-            "Response is object but lacks recognized array key",
-            response_text,
-            0,
-        )
+        # Score: inverse of rank (higher rank = lower score)
+        # Map rank 1 → 100, rank 25 → 4, etc.
+        llm_score = max(4, int(100 - (rank - 1) * 4))
 
-    return parsed
+        results.append({
+            "pub_id": pub_id,
+            "id": pub_id,  # Backward compatibility
+            "title": pub_by_id[pub_id].get("title", ""),
+            "llm_score": llm_score,
+            "llm_rank": rank,
+            "llm_reason": "",  # Not provided in minimal response
+            "llm_why_it_matters": "",  # Will be filled by summary step
+            "llm_key_findings": [],
+            "llm_tags": [],
+            "confidence": "medium",  # Default for minimal response
+        })
+
+    return results
 
 
 def _normalize_title(title: str) -> str:
