@@ -194,7 +194,7 @@ def get_must_reads_from_db(
     since_days: int = 7,
     limit: int = 10,
     use_ai: bool = True,
-    rerank_max_candidates: int = 50,
+    rerank_max_candidates: int = 25,  # Reduced from 50 to ensure reliable parsing
 ) -> dict:
     """Retrieve must-reads from SQLite database with optional AI reranking.
 
@@ -451,7 +451,7 @@ def get_must_reads_from_db(
         return _fallback_must_reads(since_days, limit, use_ai, rerank_max_candidates)
 
 
-def _fallback_must_reads(since_days: int, limit: int, use_ai: bool = True, rerank_max_candidates: int = 50) -> dict:
+def _fallback_must_reads(since_days: int, limit: int, use_ai: bool = True, rerank_max_candidates: int = 25) -> dict:
     """Fallback to latest run outputs when DB is not available.
 
     Args:
