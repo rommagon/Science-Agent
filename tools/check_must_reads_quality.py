@@ -144,7 +144,7 @@ def main():
         since_days=30,
         limit=20,  # Check top 20
         use_ai=True,
-        rerank_max_candidates=50,
+        rerank_max_candidates=25,
     )
 
     print(f"Generated at: {result['generated_at']}")

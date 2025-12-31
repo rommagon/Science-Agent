@@ -94,7 +94,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         since_days = arguments.get("since_days", 7)
         limit = arguments.get("limit", 10)
         use_ai = arguments.get("use_ai", True)
-        rerank_max_candidates = arguments.get("rerank_max_candidates", 50)
+        rerank_max_candidates = arguments.get("rerank_max_candidates", 25)
 
         logger.info(
             "get_must_reads called with since_days=%d, limit=%d, use_ai=%s, rerank_max_candidates=%d",

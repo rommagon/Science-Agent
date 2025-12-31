@@ -117,7 +117,7 @@ def export_must_reads(
             since_days=since_days,
             limit=limit,
             use_ai=use_ai,
-            rerank_max_candidates=50
+            rerank_max_candidates=25
         )
     except Exception as e:
         logger.error("Failed to generate must-reads: %s", e)

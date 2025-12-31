@@ -203,7 +203,7 @@ def get_must_reads_from_db(
         since_days: Number of days to look back
         limit: Maximum number of must-reads to return
         use_ai: Whether to use AI reranking (default: True, requires OPENAI_API_KEY)
-        rerank_max_candidates: Max candidates to pass to AI reranker (default: 50)
+        rerank_max_candidates: Max candidates to pass to AI reranker (default: 25)
 
     Returns:
         Dictionary with must_reads list and metadata
