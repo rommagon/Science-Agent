@@ -134,96 +134,73 @@ def rerank_with_openai(
             len(publications),
         )
 
-        # Call OpenAI API with strict JSON mode and minimal tokens
+        # Define JSON schema for structured output (OpenAI SDK 1.0+)
+        response_schema = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "ranked_publications",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "ranked_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of publication IDs in ranked order (most to least relevant)"
+                        }
+                    },
+                    "required": ["ranked_ids"],
+                    "additionalProperties": False
+                }
+            }
+        }
+
+        # Call OpenAI API with STRICT JSON SCHEMA enforcement
         response = client.chat.completions.create(
             model=model,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a cancer research expert. Return ONLY valid JSON with no markdown.",
+                    "content": "You are a cancer research expert. Return ONLY valid JSON matching the schema.",
                 },
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.1,
-            max_tokens=800,  # Minimal: 25 IDs * ~30 chars + overhead
-            response_format={"type": "json_object"},
+            temperature=0,  # Deterministic output
+            max_tokens=1200,  # Safe margin for 25 IDs (25 * 40 chars = 1000 + overhead)
+            response_format=response_schema,
         )
 
-        # Parse response
-        response_text = response.choices[0].message.content.strip()
+        # Extract response with multi-stage fallback parsing
+        response_text = response.choices[0].message.content
 
-        # Try to parse the minimal JSON response
-        try:
-            parsed = json.loads(response_text)
-            ranked_ids = parsed.get("ranked_ids", [])
+        # Parse with comprehensive fallback strategy
+        ranked_ids = _robust_parse_ranked_ids(response_text, len(publications))
 
-            if not ranked_ids or not isinstance(ranked_ids, list):
-                raise ValueError("Response missing 'ranked_ids' array")
+        if not ranked_ids:
+            logger.error("Failed to extract ranked_ids from response")
+            logger.error("Response preview: %s", _safe_preview(response_text))
+            return None
 
-            # Convert minimal response to full format for backward compatibility
-            rerank_results = _convert_ranked_ids_to_results(
-                ranked_ids, publications
-            )
+        # Validate and repair ranked_ids
+        candidate_ids = [pub["id"] for pub in publications]
+        ranked_ids = _validate_and_repair_ranked_ids(
+            ranked_ids, candidate_ids
+        )
 
-            logger.info(
-                "Successfully reranked %d publications with OpenAI",
-                len(rerank_results),
-            )
-            return rerank_results
+        if not ranked_ids:
+            logger.error("Validation/repair failed, no valid ranked_ids")
+            return None
 
-        except (json.JSONDecodeError, ValueError) as e:
-            # RETRY ONCE with repair prompt
-            logger.warning(
-                "Failed to parse OpenAI response (attempt 1/2): %s", e
-            )
-            logger.warning(
-                "Response preview: %s...", response_text[:300]
-            )
-            logger.info("Retrying with repair prompt")
+        # Convert minimal response to full format
+        rerank_results = _convert_ranked_ids_to_results(
+            ranked_ids, publications
+        )
 
-            repair_prompt = f"""Your previous output was invalid. Return ONLY this JSON:
-{{
-  "ranked_ids": ["exact_id_1", "exact_id_2", ...]
-}}
-
-Include all {len(publications)} IDs from the original list in ranked order."""
-
-            retry_response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "Return ONLY valid JSON."},
-                    {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": response_text},
-                    {"role": "user", "content": repair_prompt},
-                ],
-                temperature=0.0,
-                max_tokens=800,
-                response_format={"type": "json_object"},
-            )
-
-            retry_text = retry_response.choices[0].message.content.strip()
-
-            try:
-                parsed = json.loads(retry_text)
-                ranked_ids = parsed.get("ranked_ids", [])
-
-                if not ranked_ids:
-                    raise ValueError("Retry missing 'ranked_ids'")
-
-                rerank_results = _convert_ranked_ids_to_results(
-                    ranked_ids, publications
-                )
-
-                logger.info("Successfully parsed on retry (attempt 2/2)")
-                return rerank_results
-
-            except (json.JSONDecodeError, ValueError) as retry_error:
-                logger.error(
-                    "Failed on retry (attempt 2/2): %s", retry_error
-                )
-                logger.error("Response: %s...", retry_text[:300])
-                logger.error("Falling back to heuristic ranking")
-                return None
+        logger.info(
+            "Successfully reranked %d publications with OpenAI",
+            len(rerank_results),
+        )
+        return rerank_results
 
     except ImportError:
         logger.warning("OpenAI library not installed, skipping LLM rerank")
@@ -231,6 +208,195 @@ Include all {len(publications)} IDs from the original list in ranked order."""
     except Exception as e:
         logger.error("OpenAI API call failed: %s", e)
         return None
+
+
+def _safe_preview(text: str, max_len: int = 300) -> str:
+    """Create a safe preview of text for logging (no secrets).
+
+    Args:
+        text: Text to preview
+        max_len: Maximum length
+
+    Returns:
+        Safe preview string
+    """
+    if not text:
+        return "[empty]"
+    preview = text[:max_len]
+    # Redact anything that looks like an API key
+    preview = re.sub(r'sk-[a-zA-Z0-9]{20,}', '[REDACTED_KEY]', preview)
+    return preview + ("..." if len(text) > max_len else "")
+
+
+def _robust_parse_ranked_ids(response_text: str, expected_count: int) -> Optional[List[str]]:
+    """Parse ranked_ids from response with comprehensive fallback strategies.
+
+    Tries multiple parsing strategies in order:
+    1. Direct JSON parse
+    2. Extract from markdown code fences
+    3. Find JSON object substring
+    4. Regex extract ranked_ids array
+
+    Args:
+        response_text: Raw response from OpenAI
+        expected_count: Expected number of IDs
+
+    Returns:
+        List of ranked IDs or None if all strategies fail
+    """
+    if not response_text:
+        logger.warning("Empty response text")
+        return None
+
+    # Strategy 1: Direct JSON parse
+    try:
+        parsed = json.loads(response_text)
+        if isinstance(parsed, dict) and "ranked_ids" in parsed:
+            ranked_ids = parsed["ranked_ids"]
+            if isinstance(ranked_ids, list):
+                logger.debug("Parsed ranked_ids via direct JSON")
+                return ranked_ids
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Remove markdown code fences
+    cleaned = response_text.strip()
+    if cleaned.startswith("```"):
+        # Extract content between code fences
+        match = re.search(r'```(?:json)?\s*\n(.*?)\n```', cleaned, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group(1))
+                if isinstance(parsed, dict) and "ranked_ids" in parsed:
+                    ranked_ids = parsed["ranked_ids"]
+                    if isinstance(ranked_ids, list):
+                        logger.debug("Parsed ranked_ids from code fence")
+                        return ranked_ids
+            except json.JSONDecodeError:
+                pass
+
+    # Strategy 3: Extract JSON object substring (first { to last })
+    first_brace = cleaned.find('{')
+    last_brace = cleaned.rfind('}')
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        json_substr = cleaned[first_brace:last_brace + 1]
+        try:
+            parsed = json.loads(json_substr)
+            if isinstance(parsed, dict) and "ranked_ids" in parsed:
+                ranked_ids = parsed["ranked_ids"]
+                if isinstance(ranked_ids, list):
+                    logger.debug("Parsed ranked_ids from JSON substring")
+                    return ranked_ids
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 4: Regex extract ranked_ids array (flexible - handles truncation)
+    # Look for "ranked_ids": ["...", "...", ...] or truncated versions
+    match = re.search(
+        r'"ranked_ids"\s*:\s*\[([^\]]*)',  # Match up to ] or end
+        cleaned,
+        re.DOTALL
+    )
+    if match:
+        array_content = match.group(1)
+        # Extract all quoted strings (handles truncation mid-string)
+        id_matches = re.findall(r'"([^"]+)"', array_content)
+        if id_matches:
+            logger.debug(
+                "Parsed ranked_ids via regex extraction (%d IDs found)",
+                len(id_matches)
+            )
+            return id_matches
+
+    logger.warning("All parsing strategies failed")
+    return None
+
+
+def _validate_and_repair_ranked_ids(
+    ranked_ids: List[str],
+    candidate_ids: List[str]
+) -> Optional[List[str]]:
+    """Validate and repair ranked_ids list.
+
+    Ensures:
+    - All IDs are from candidate list
+    - No duplicates
+    - Length matches candidate count (repairs if needed)
+
+    Args:
+        ranked_ids: List of IDs from LLM
+        candidate_ids: Valid candidate IDs
+
+    Returns:
+        Validated/repaired list or None if unrepairable
+    """
+    if not ranked_ids:
+        logger.error("ranked_ids is empty")
+        return None
+
+    if not candidate_ids:
+        logger.error("candidate_ids is empty")
+        return None
+
+    candidate_set = set(candidate_ids)
+
+    # Filter to valid IDs and remove duplicates (preserving order)
+    valid_ids = []
+    seen = set()
+    unknown_count = 0
+    duplicate_count = 0
+
+    for pub_id in ranked_ids:
+        if pub_id in candidate_set:
+            if pub_id not in seen:
+                valid_ids.append(pub_id)
+                seen.add(pub_id)
+            else:
+                duplicate_count += 1
+        else:
+            unknown_count += 1
+
+    if unknown_count > 0:
+        logger.warning(
+            "Dropped %d unknown IDs from ranked_ids", unknown_count
+        )
+
+    if duplicate_count > 0:
+        logger.warning(
+            "Removed %d duplicate IDs from ranked_ids", duplicate_count
+        )
+
+    # Add missing candidates in original order
+    missing_ids = [cid for cid in candidate_ids if cid not in seen]
+
+    if missing_ids:
+        logger.warning(
+            "Adding %d missing IDs to ranked_ids (appended at end)",
+            len(missing_ids)
+        )
+        valid_ids.extend(missing_ids)
+
+    # Final validation
+    if len(valid_ids) != len(candidate_ids):
+        logger.error(
+            "Length mismatch after repair: got %d, expected %d",
+            len(valid_ids),
+            len(candidate_ids)
+        )
+        return None
+
+    if set(valid_ids) != candidate_set:
+        logger.error("ID set mismatch after repair")
+        return None
+
+    logger.info(
+        "Validated ranked_ids: %d total (%d from LLM, %d appended)",
+        len(valid_ids),
+        len(valid_ids) - len(missing_ids),
+        len(missing_ids)
+    )
+
+    return valid_ids
 
 
 def _convert_ranked_ids_to_results(
