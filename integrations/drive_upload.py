@@ -238,3 +238,94 @@ def upload_latest_outputs(folder_id: str, outdir: str = "data") -> dict:
         results["_has_failures"] = False
 
     return results
+
+def ensure_subfolder(service, parent_folder_id: str, name: str) -> str:
+    """Ensure a subfolder named `name` exists under `parent_folder_id`.
+    Returns the folder_id.
+    """
+    query = (
+        f"'{parent_folder_id}' in parents and "
+        f"name = '{name}' and "
+        "mimeType = 'application/vnd.google-apps.folder' and "
+        "trashed = false"
+    )
+
+    response = service.files().list(
+        q=query,
+        spaces="drive",
+        fields="files(id, name)",
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True,
+    ).execute()
+
+    files = response.get("files", [])
+    if files:
+        return files[0]["id"]
+
+    folder_metadata = {
+        "name": name,
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [parent_folder_id],
+    }
+
+    folder = service.files().create(
+        body=folder_metadata,
+        supportsAllDrives=True,
+        fields="id",
+    ).execute()
+
+    return folder["id"]
+
+
+def upload_daily_csv(folder_id: str, run_id: str, outdir: str = "data") -> dict:
+    """Upload the daily run CSV into Drive under:
+        Daily/<run_id>/<run_id>_new.csv
+
+    Args:
+        folder_id: Google Drive folder ID (root AciTrack folder)
+        run_id: Daily run id (YYYY-MM-DD)
+        outdir: Base output directory (default: "data")
+
+    Returns:
+        Dict with success, file_id, webViewLink, and drive_path (or error)
+    """
+    output_dir = Path(outdir) / "output"
+
+    # Prefer run-specific CSV, fallback to latest_new.csv
+    run_csv = output_dir / f"{run_id}_new.csv"
+    latest_csv = output_dir / "latest_new.csv"
+
+    if run_csv.exists():
+        local_path = run_csv
+        filename = run_csv.name
+    elif latest_csv.exists():
+        local_path = latest_csv
+        filename = f"{run_id}_new.csv"  # keep canonical filename in Drive
+    else:
+        return {
+            "success": False,
+            "error": f"Daily CSV not found: {run_csv} (or fallback {latest_csv})",
+        }
+
+    try:
+        service = get_drive_service()
+    except Exception as e:
+        logger.error("Failed to create Drive service: %s", e)
+        return {"success": False, "error": str(e)}
+
+    try:
+        # Create/find Daily/<run_id>/ folder structure
+        daily_root_id = ensure_subfolder(service, folder_id, "Daily")
+        run_folder_id = ensure_subfolder(service, daily_root_id, run_id)
+
+        logger.info("Uploading daily CSV to Daily/%s/ folder", run_id)
+
+        result = upload_or_update_file(service, run_folder_id, local_path, filename)
+
+        if result.get("success"):
+            result["drive_path"] = f"Daily/{run_id}/{filename}"
+        return result
+
+    except Exception as e:
+        logger.error("❌ Daily CSV upload failed: %s", e)
+        return {"success": False, "error": str(e)}
