@@ -277,19 +277,13 @@ def ensure_subfolder(service, parent_folder_id: str, name: str) -> str:
     return folder["id"]
 
 
-def upload_daily_csv(folder_id: str, run_id: str, outdir: str = "data") -> dict:
+def upload_daily_csv(parent_folder_id: str, run_id: str, outdir: str = "data") -> dict:
     """Upload the daily run CSV into Drive under:
         Daily/<run_id>/<run_id>_new.csv
-
-    Args:
-        folder_id: Google Drive folder ID (root AciTrack folder)
-        run_id: Daily run id (YYYY-MM-DD)
-        outdir: Base output directory (default: "data")
-
-    Returns:
-        Dict with success, file_id, webViewLink, and drive_path (or error)
     """
+    folder_id = parent_folder_id  # compatibility with run.py call
     output_dir = Path(outdir) / "output"
+    ...
 
     # Prefer run-specific CSV, fallback to latest_new.csv
     run_csv = output_dir / f"{run_id}_new.csv"
