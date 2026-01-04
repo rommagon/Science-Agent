@@ -97,7 +97,7 @@ jobs:
           ACITRACK_SPREADSHEET_ID: ${{ secrets.ACITRACK_SPREADSHEET_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ACITRACK_LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '48' }}
-          ACITRACK_WRITE_SHEETS: 'false'  # Set to 'true' to enable Google Sheets integration
+          ACITRACK_WRITE_SHEETS: 'true'  # Set to 'true' to enable Google Sheets integration
         run: |
           # Run in daily mode with lookback window
           # Google Sheets integration is controlled by ACITRACK_WRITE_SHEETS env var
