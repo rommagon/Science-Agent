@@ -277,29 +277,43 @@ def ensure_subfolder(service, parent_folder_id: str, name: str) -> str:
     return folder["id"]
 
 
-def upload_daily_csv(parent_folder_id: str, run_id: str, outdir: str = "data") -> dict:
+def upload_daily_csv(
+    parent_folder_id: str,
+    run_id: str,
+    outdir: str = "data",
+    csv_path: Optional[str] = None,
+) -> dict:
     """Upload the daily run CSV into Drive under:
         Daily/<run_id>/<run_id>_new.csv
+
+    Supports two modes:
+    - Preferred: csv_path provided (explicit path from run.py)
+    - Fallback: look for data/output/{run_id}_new.csv, then data/output/latest_new.csv
     """
-    folder_id = parent_folder_id  # compatibility with run.py call
     output_dir = Path(outdir) / "output"
-    ...
 
-    # Prefer run-specific CSV, fallback to latest_new.csv
-    run_csv = output_dir / f"{run_id}_new.csv"
-    latest_csv = output_dir / "latest_new.csv"
-
-    if run_csv.exists():
-        local_path = run_csv
-        filename = run_csv.name
-    elif latest_csv.exists():
-        local_path = latest_csv
+    # Resolve which local CSV to upload
+    if csv_path:
+        local_path = Path(csv_path)
         filename = f"{run_id}_new.csv"  # keep canonical filename in Drive
     else:
-        return {
-            "success": False,
-            "error": f"Daily CSV not found: {run_csv} (or fallback {latest_csv})",
-        }
+        run_csv = output_dir / f"{run_id}_new.csv"
+        latest_csv = output_dir / "latest_new.csv"
+
+        if run_csv.exists():
+            local_path = run_csv
+            filename = run_csv.name
+        elif latest_csv.exists():
+            local_path = latest_csv
+            filename = f"{run_id}_new.csv"
+        else:
+            return {
+                "success": False,
+                "error": f"Daily CSV not found: {run_csv} (or fallback {latest_csv})",
+            }
+
+    if not local_path.exists():
+        return {"success": False, "error": f"CSV not found at path: {local_path}"}
 
     try:
         service = get_drive_service()
@@ -309,7 +323,7 @@ def upload_daily_csv(parent_folder_id: str, run_id: str, outdir: str = "data") -
 
     try:
         # Create/find Daily/<run_id>/ folder structure
-        daily_root_id = ensure_subfolder(service, folder_id, "Daily")
+        daily_root_id = ensure_subfolder(service, parent_folder_id, "Daily")
         run_folder_id = ensure_subfolder(service, daily_root_id, run_id)
 
         logger.info("Uploading daily CSV to Daily/%s/ folder", run_id)
@@ -318,6 +332,8 @@ def upload_daily_csv(parent_folder_id: str, run_id: str, outdir: str = "data") -
 
         if result.get("success"):
             result["drive_path"] = f"Daily/{run_id}/{filename}"
+            result["folder_id"] = run_folder_id
+
         return result
 
     except Exception as e:
