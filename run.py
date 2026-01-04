@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import yaml
 
+from config.daily_config import compute_run_context, get_legacy_run_id, WRITE_SHEETS
 from diff.dedupe import deduplicate_publications
 from diff.detect_changes import detect_changes
 from enrich.commercial import enrich_publication_commercial
@@ -243,26 +244,57 @@ def main() -> None:
         action="store_true",
         help="Upload latest outputs to Google Drive (requires GOOGLE_APPLICATION_CREDENTIALS and ACITRACK_DRIVE_FOLDER_ID env vars)",
     )
+    parser.add_argument(
+        "--daily",
+        action="store_true",
+        help="Run in DAILY mode with date-based run_id (YYYY-MM-DD) and lookback window (default: 48 hours)",
+    )
+    parser.add_argument(
+        "--lookback-hours",
+        type=int,
+        help="Lookback window in hours for daily runs (default: 48). Overrides --since-days when --daily is used.",
+    )
+    parser.add_argument(
+        "--spreadsheet-id",
+        type=str,
+        help="Google Sheets spreadsheet ID for Master_Publications and System_Health updates",
+    )
 
     args = parser.parse_args()
 
     # Print demo command hint
     if len(sys.argv) == 1:
         print("\nDemo mode: python run.py --reset-snapshot --since-days 7 --max-items-per-source 5\n")
+        print("Daily mode: python run.py --daily --lookback-hours 48\n")
 
-    # Generate unique run ID and track start time
-    run_start_time = datetime.now()
-    run_id = run_start_time.strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
-
-    # Calculate cutoff date - --since-date overrides --since-days
-    if args.since_date:
-        try:
-            since_date = datetime.strptime(args.since_date, "%Y-%m-%d")
-        except ValueError:
-            logger.error("Invalid date format for --since-date. Use YYYY-MM-DD format.")
-            sys.exit(1)
+    # Determine run mode and generate run_id
+    if args.daily:
+        # Daily mode: use date-based run_id and lookback window
+        run_context = compute_run_context(lookback_hours=args.lookback_hours)
+        run_id = run_context.run_id
+        since_date = run_context.window_start.replace(tzinfo=None)  # Convert to naive datetime
+        run_start_time = run_context.window_end.replace(tzinfo=None)
+        logger.info(
+            "DAILY MODE: run_id=%s, lookback=%dh, window=%s to %s",
+            run_id,
+            run_context.lookback_hours,
+            run_context.window_start.isoformat(),
+            run_context.window_end.isoformat()
+        )
     else:
-        since_date = datetime.now() - timedelta(days=args.since_days)
+        # Legacy mode: timestamp-based run_id
+        run_start_time = datetime.now()
+        run_id = run_start_time.strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
+
+        # Calculate cutoff date - --since-date overrides --since-days
+        if args.since_date:
+            try:
+                since_date = datetime.strptime(args.since_date, "%Y-%m-%d")
+            except ValueError:
+                logger.error("Invalid date format for --since-date. Use YYYY-MM-DD format.")
+                sys.exit(1)
+        else:
+            since_date = datetime.now() - timedelta(days=args.since_days)
 
     # Ensure output directories exist
     outdir = Path(args.outdir)
@@ -598,7 +630,7 @@ def main() -> None:
             sys.exit(1)
 
         try:
-            from integrations.drive_upload import upload_latest_outputs
+            from integrations.drive_upload import upload_latest_outputs, upload_daily_csv
 
             results = upload_latest_outputs(folder_id, str(outdir))
 
@@ -607,6 +639,27 @@ def main() -> None:
                 logger.error("Some files failed to upload to Google Drive")
             else:
                 logger.info("All files uploaded to Google Drive successfully")
+
+            # If in daily mode, also upload CSV to Daily/YYYY-MM-DD/ folder
+            if args.daily:
+                csv_path = outdir / "output" / f"{run_id}_new.csv"
+                if csv_path.exists():
+                    logger.info("Uploading daily CSV to Daily/%s/ folder", run_id)
+                    daily_result = upload_daily_csv(
+                        parent_folder_id=folder_id,
+                        run_id=run_id,
+                        csv_path=csv_path
+                    )
+                    if daily_result.get("success"):
+                        logger.info("Daily CSV uploaded to %s", daily_result.get("path"))
+                        print(f"   Daily CSV: {daily_result.get('path')}")
+                        if daily_result.get("webViewLink"):
+                            print(f"   {daily_result['webViewLink']}")
+                    else:
+                        logger.warning("Daily CSV upload failed: %s", daily_result.get("error"))
+                        print(f"   ⚠️  Daily CSV upload failed: {daily_result.get('error')}")
+                else:
+                    logger.warning("Daily CSV not found at %s", csv_path)
 
         except Exception as e:
             logger.error("Google Drive upload failed: %s", e)
@@ -645,6 +698,118 @@ def main() -> None:
             "Run history storage failed: %s (continuing)",
             run_history_result["error"]
         )
+
+    # Phase 8 (optional): Google Sheets integration for daily runs
+    # Only runs if WRITE_SHEETS=true environment variable is set
+    sheets_success = True
+    if WRITE_SHEETS and args.daily and args.spreadsheet_id:
+        logger.info("Phase 8: Updating Google Sheets (Master_Publications and System_Health)")
+        logger.info("WRITE_SHEETS=true - Sheets integration enabled")
+
+        try:
+            from integrations.sheets import (
+                upsert_publications,
+                update_system_health,
+                verify_run_consistency
+            )
+
+            # Upsert publications (all processed, both NEW and UNCHANGED)
+            # Note: Headers are validated automatically by upsert_publications()
+            logger.info("Upserting publications to Master_Publications...")
+
+            # Safe conversion helper: handle dataclasses, dicts, and objects
+            def safe_convert_to_dict(item):
+                """Convert item to dict, handling dataclasses, dicts, and objects."""
+                # Check if it's a dataclass instance
+                if hasattr(item, '__dataclass_fields__'):
+                    return asdict(item)
+                # Already a dict
+                elif isinstance(item, dict):
+                    return item
+                # Has __dict__ attribute (plain object)
+                elif hasattr(item, '__dict__'):
+                    return item.__dict__
+                else:
+                    # Unsupported type
+                    return None
+
+            # Convert all items, skipping those that fail
+            publications_dict = []
+            converted_count = 0
+            skipped_count = 0
+
+            for pub in changes["all_with_status"]:
+                result = safe_convert_to_dict(pub)
+                if result is not None:
+                    publications_dict.append(result)
+                    converted_count += 1
+                else:
+                    logger.warning("Skipped item (unsupported type): %s", type(pub).__name__)
+                    skipped_count += 1
+
+            logger.info("Conversion stats: %d converted, %d skipped", converted_count, skipped_count)
+
+            upsert_stats = upsert_publications(
+                spreadsheet_id=args.spreadsheet_id,
+                publications=publications_dict,
+                run_id=run_id
+            )
+
+            logger.info(
+                "Publications upserted: %d inserted, %d updated, %d errors",
+                upsert_stats["inserted"],
+                upsert_stats["updated"],
+                upsert_stats["errors"]
+            )
+            print(f"   Master_Publications: {upsert_stats['inserted']} inserted, {upsert_stats['updated']} updated")
+
+            # Update System_Health
+            logger.info("Updating System_Health...")
+            health_success = update_system_health(
+                spreadsheet_id=args.spreadsheet_id,
+                run_id=run_id,
+                total_publications_evaluated=changes["count_total"],
+                new_this_run=changes["count_new"],
+                must_reads_count=0,  # TODO: integrate must-reads count if needed
+                last_error=""  # Blank on success
+            )
+
+            if health_success:
+                logger.info("System_Health updated successfully")
+                print("   System_Health: Updated successfully")
+            else:
+                logger.warning("System_Health update failed (non-blocking)")
+                sheets_success = False
+
+            # Invariant check: Run-scoped consistency check (CSV vs Sheets for this run)
+            logger.info("Running run-scoped consistency check: CSV vs Sheets (run_id=%s)...", run_id)
+            csv_path = outdir / "output" / "latest_new.csv"
+            if csv_path.exists():
+                consistency = verify_run_consistency(
+                    spreadsheet_id=args.spreadsheet_id,
+                    run_id=run_id,
+                    csv_path=str(csv_path)
+                )
+                if consistency.get("all_present"):
+                    print(f"   ✓ Run consistency check PASSED: All {consistency['csv_count']} CSV records in Sheets (run_id={run_id}, is_new=TRUE)")
+                else:
+                    missing_count = len(consistency.get("missing_in_sheets", []))
+                    print(f"   ⚠️  Run consistency check: {missing_count}/{consistency['csv_count']} records missing (run_id={run_id})")
+                    logger.warning("Run consistency check found %d missing records", missing_count)
+            else:
+                logger.warning("CSV file not found for consistency check: %s", csv_path)
+
+        except Exception as e:
+            logger.error("Google Sheets update failed: %s", e)
+            print(f"\n⚠️  WARNING: Google Sheets update failed: {e}")
+            sheets_success = False
+
+    elif WRITE_SHEETS and args.daily and not args.spreadsheet_id:
+        logger.warning("WRITE_SHEETS=true but --spreadsheet-id not provided, skipping Google Sheets updates")
+        print("\n⚠️  WARNING: WRITE_SHEETS=true but --spreadsheet-id not provided, skipping Sheets")
+    elif not WRITE_SHEETS and args.daily:
+        logger.info("WRITE_SHEETS=false - Skipping Google Sheets integration (feature disabled)")
+        print("   Google Sheets: Skipped (WRITE_SHEETS=false)")
 
     # Summary
     print("\n" + "=" * 70)

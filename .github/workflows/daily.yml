@@ -1,0 +1,144 @@
+name: Daily AciTrack Run
+
+on:
+  # Run every day at 09:00 UTC (1am PT / 4am ET)
+  schedule:
+    - cron: '0 9 * * *'
+
+  # Allow manual trigger with optional parameters
+  workflow_dispatch:
+    inputs:
+      lookback_hours:
+        description: 'Lookback window in hours (default: 48)'
+        required: false
+        default: '48'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+
+    # If your secrets are stored under a GitHub "Environment" (e.g., production),
+    # this line is REQUIRED. If your secrets are repo-level, you can remove it.
+    environment: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Need full history for git operations
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create service account credentials file
+        run: |
+          python3 - <<'PY'
+          import os, json, pathlib
+          s = os.environ["ACITRACK_GCP_SA_JSON"]
+          obj = json.loads(s)  # validate JSON
+          p = pathlib.Path.home() / "gcp-sa-key.json"
+          p.write_text(json.dumps(obj))
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+            f.write(f"GOOGLE_APPLICATION_CREDENTIALS={p}\n")
+          print(f"Wrote creds to {p}")
+          PY
+        env:
+          ACITRACK_GCP_SA_JSON: ${{ secrets.ACITRACK_GCP_SA_JSON }}
+
+      - name: Debug OpenAI key presence (safe)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "OPENAI_API_KEY is NOT set (empty)"
+            exit 1
+          else
+            echo "OPENAI_API_KEY is set (length: ${#OPENAI_API_KEY})"
+          fi
+
+      - name: Sanity check OpenAI auth (safe)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import requests
+
+          k = os.getenv("OPENAI_API_KEY", "")
+          assert k and len(k) > 20, "OPENAI_API_KEY missing/too short"
+
+          r = requests.get(
+              "https://api.openai.com/v1/models",
+              headers={"Authorization": f"Bearer {k}"},
+              timeout=30,
+          )
+          print("status", r.status_code)
+          print(r.text[:200])
+          if r.status_code != 200:
+              raise SystemExit("OpenAI auth failed")
+          PY
+
+      - name: Run acitrack in DAILY mode
+        env:
+          ACITRACK_DRIVE_FOLDER_ID: ${{ secrets.ACITRACK_DRIVE_FOLDER_ID }}
+          ACITRACK_SPREADSHEET_ID: ${{ secrets.ACITRACK_SPREADSHEET_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ACITRACK_LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '48' }}
+          ACITRACK_WRITE_SHEETS: 'false'  # Set to 'true' to enable Google Sheets integration
+        run: |
+          # Run in daily mode with lookback window
+          # Google Sheets integration is controlled by ACITRACK_WRITE_SHEETS env var
+          python3 run.py \
+            --daily \
+            --lookback-hours ${ACITRACK_LOOKBACK_HOURS} \
+            --upload-drive \
+            --spreadsheet-id ${ACITRACK_SPREADSHEET_ID}
+
+      - name: Persist snapshot state
+        run: |
+          # Configure git for bot commits
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Add snapshot file if it exists and has changes
+          if [ -f data/snapshots/latest.json ]; then
+            git add data/snapshots/latest.json || true
+
+            # Only commit if there are changes staged
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: update snapshot state from daily run"
+              git push origin HEAD:main
+            else
+              echo "No changes to snapshot file, skipping commit"
+            fi
+          else
+            echo "Snapshot file does not exist, skipping commit"
+          fi
+
+      - name: Upload outputs as artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acitrack-daily-outputs-${{ github.run_number }}
+          path: |
+            data/output/latest_report.md
+            data/output/latest_new.csv
+            data/output/latest_manifest.json
+            data/output/latest_must_reads.json
+            data/output/latest_must_reads.md
+            data/output/latest_summaries.json
+            data/output/latest_db.sqlite.gz
+          retention-days: 30
