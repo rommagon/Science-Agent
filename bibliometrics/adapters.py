@@ -5,7 +5,7 @@ these would connect to services like OpenAlex, Semantic Scholar, or CrossRef.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,8 @@ class BibliometricMetrics:
     pub_type: Optional[str] = None
     h_index: int = 0
     field_citation_ratio: float = 0.0
+    cited_by_ids: list = field(default_factory=list)
+    reference_ids: list = field(default_factory=list)
 
 
 def enrich_publication(
