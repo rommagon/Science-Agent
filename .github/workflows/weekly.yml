@@ -85,12 +85,22 @@ jobs:
               raise SystemExit("OpenAI auth failed")
           PY
 
-      - name: Run acitrack with Drive upload
+      - name: Run acitrack in WEEKLY mode
         env:
           ACITRACK_DRIVE_FOLDER_ID: ${{ secrets.ACITRACK_DRIVE_FOLDER_ID }}
+          ACITRACK_SPREADSHEET_ID: ${{ secrets.ACITRACK_SPREADSHEET_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ACITRACK_WRITE_SHEETS: 'false'  # Sheets integration disabled for weekly runs
         run: |
-          python3 run.py --since-days 7 --max-items-per-source 5 --upload-drive
+          # Run in weekly mode with 7-day lookback window
+          # - LLM relevancy and credibility scoring enabled
+          # - Google Drive upload to Weekly/<run_id>/ folder
+          # - No limit on items per source (full weekly sweep)
+          python3 run.py \
+            --weekly \
+            --lookback-days 7 \
+            --upload-drive \
+            --spreadsheet-id ${ACITRACK_SPREADSHEET_ID}
 
       - name: Persist snapshot state
         run: |
