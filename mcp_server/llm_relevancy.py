@@ -128,7 +128,7 @@ def _call_llm(prompt: str, api_key: str, model: str) -> Optional[str]:
                 }
             ],
             temperature=0.3,  # Lower temperature for more consistent scoring
-            max_tokens=500,
+            max_completion_tokens=500,
         )
 
         return response.choices[0].message.content.strip()

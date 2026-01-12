@@ -28,6 +28,9 @@ def enrich_publication(
     doi: Optional[str] = None,
     pmid: Optional[str] = None,
     title: Optional[str] = None,
+    max_cited_by: int = 0,
+    max_references: int = 0,
+    max_related: int = 0,
 ) -> Optional[BibliometricMetrics]:
     """Enrich a publication with bibliometric data.
 
@@ -35,6 +38,9 @@ def enrich_publication(
         doi: Digital Object Identifier
         pmid: PubMed ID
         title: Publication title (fallback if DOI/PMID not available)
+        max_cited_by: Maximum number of citing papers to fetch (0 = none)
+        max_references: Maximum number of references to fetch (0 = none)
+        max_related: Maximum number of related papers to fetch (0 = none)
 
     Returns:
         BibliometricMetrics object or None if enrichment fails
