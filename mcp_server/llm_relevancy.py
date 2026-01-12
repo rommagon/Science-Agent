@@ -363,3 +363,34 @@ def batch_score_relevancy(items: list[Dict], use_cache: bool = True) -> list[Dic
         results.append(result)
 
     return results
+
+
+def compute_relevancy_score(title: str, abstract: str, source: str = "") -> Dict:
+    """Compute relevancy score for a publication (wrapper for backward compatibility).
+
+    This function provides a simplified interface compatible with the scoring.relevance
+    module's expectations.
+
+    Args:
+        title: Publication title
+        abstract: Abstract or summary text
+        source: Source name (optional)
+
+    Returns:
+        Dictionary with keys:
+        - relevancy_score: int 0-100 or None if failed
+        - relevancy_reason: str explanation
+        - confidence: str "low|medium|high"
+        - signals: dict with detection signals
+    """
+    # Build item dict for score_relevancy
+    item = {
+        "title": title,
+        "raw_text": abstract,
+        "summary": abstract,
+        "source": source,
+    }
+
+    result = score_relevancy(item)
+
+    return result

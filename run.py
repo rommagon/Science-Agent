@@ -600,7 +600,7 @@ def main() -> None:
         else:
             all_pubs_sorted = sorted(
                 changes["all_with_status"],
-                key=lambda p: p.get("relevance_score", 0),
+                key=lambda p: p.get("relevance_score") or 0,  # Treat None as 0 for sorting
                 reverse=True,
             )
             stage1_survivors = all_pubs_sorted[:STAGE1_TOP_K]

@@ -402,8 +402,8 @@ def clamp_future_date(
 ) -> Optional[datetime]:
     """Clamp dates that are suspiciously in the future.
 
-    If a date is more than 2 days in the future, it's likely a parsing error
-    (e.g., year-only dates defaulting to Jan 1 of next year).
+    Legitimate e-pub dates can be 1-2 weeks ahead for upcoming journal issues.
+    Only reject dates that are >90 days in the future, or >365 days for year-only parses.
 
     Args:
         pub_date: Publication date to validate
@@ -419,12 +419,17 @@ def clamp_future_date(
     if not pub_date:
         return None
 
-    # Calculate future threshold: now + 2 days
+    # Calculate future threshold based on confidence
     now = datetime.now()
-    future_threshold = now + timedelta(days=2)
+    if low_confidence:
+        # For year-only dates: allow up to 365 days (likely defaulted to Jan 1 of next year)
+        future_threshold = now + timedelta(days=365)
+    else:
+        # For full dates: allow up to 90 days (e-pub dates for upcoming issues)
+        future_threshold = now + timedelta(days=90)
 
     if pub_date > future_threshold:
-        # Date is suspiciously in the future
+        # Date is suspiciously far in the future
         logger.warning(
             "Suspicious future date detected: source='%s', id='%s', title='%s', "
             "date='%s' (from %s, low_conf=%s), threshold='%s' -> Setting to None",
