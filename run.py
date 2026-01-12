@@ -989,6 +989,77 @@ def main() -> None:
                 else:
                     logger.info("All files uploaded to Google Drive successfully")
 
+                # Update manifest with Drive paths and file IDs if upload succeeded
+                if not results.get("_has_failures") and results.get("drive_output_paths"):
+                    logger.info("Updating manifest with Drive paths and file IDs")
+                    try:
+                        from output.manifest import generate_run_manifest, save_run_manifest, update_latest_pointer, get_output_paths
+
+                        # Get scoring info if available
+                        scoring_info = {}
+                        try:
+                            from mcp_server.llm_relevancy import SCORING_VERSION as REL_VERSION
+                            from mcp_server.llm_credibility import CREDIBILITY_VERSION as CRED_VERSION
+                            scoring_info = {
+                                "relevancy_version": REL_VERSION,
+                                "credibility_version": CRED_VERSION,
+                            }
+                        except:
+                            pass
+
+                        # Regenerate manifest with Drive info
+                        manifest = generate_run_manifest(
+                            run_id=run_id,
+                            run_type=run_type,
+                            generated_at=datetime.now().isoformat(),
+                            window_start=run_context.window_start.isoformat(),
+                            window_end=run_context.window_end.isoformat(),
+                            total_candidates=changes["count_total"],
+                            fetched_count=dedupe_stats["total_input"],
+                            deduplicated_count=dedupe_stats["total_output"],
+                            new_count=changes["count_new"],
+                            unchanged_count=changes["count_total"] - changes["count_new"],
+                            output_paths=get_output_paths(run_id, run_type, base_dir=args.outdir),
+                            scoring_info=scoring_info,
+                            active_sources=active_sources,
+                            source_stats=source_stats,
+                            config_path=args.config,
+                            config_hash=compute_file_hash(args.config),
+                            dedupe_stats=dedupe_stats,
+                            drive_output_paths=results.get("drive_output_paths"),
+                            drive_file_ids=results.get("drive_file_ids"),
+                        )
+
+                        # Save updated manifest locally
+                        save_run_manifest(manifest, outdir)
+
+                        # Update latest pointer with Drive info
+                        update_latest_pointer(manifest, outdir)
+
+                        logger.info("Manifest updated with Drive paths and file IDs")
+
+                        # Re-upload updated manifest to Drive
+                        manifest_path = outdir / "manifests" / run_type / f"{run_id}.json"
+                        if manifest_path.exists():
+                            from integrations.drive_upload import get_drive_service, ensure_subfolder, upload_or_update_file
+
+                            service = get_drive_service()
+                            run_type_folder = run_type.capitalize()
+                            manifests_root_id = ensure_subfolder(service, folder_id, "Manifests")
+                            manifests_type_id = ensure_subfolder(service, manifests_root_id, run_type_folder)
+
+                            upload_or_update_file(service, manifests_type_id, manifest_path, f"{run_id}.json")
+                            logger.info("Re-uploaded updated manifest to Drive")
+
+                        # Re-upload updated latest pointer to Drive
+                        latest_pointer_path = outdir / "manifests" / run_type / "latest.json"
+                        if latest_pointer_path.exists():
+                            upload_or_update_file(service, manifests_type_id, latest_pointer_path, "latest.json")
+                            logger.info("Re-uploaded updated latest pointer to Drive")
+
+                    except Exception as e:
+                        logger.warning("Failed to update manifest with Drive info: %s", e)
+
             else:
                 # Legacy path: upload to root folder
                 from integrations.drive_upload import upload_latest_outputs

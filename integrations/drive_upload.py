@@ -360,7 +360,14 @@ def upload_run_outputs(
         outdir: Base output directory (Path to "data")
 
     Returns:
-        Dictionary with upload results
+        Dictionary with upload results, Drive paths, and file IDs:
+        {
+            "drive_output_paths": {"must_reads": "Daily/<run_id>/must_reads.json", ...},
+            "drive_file_ids": {"must_reads": "file_id_123", ...},
+            "drive_manifest_path": "Manifests/Daily/<run_id>.json",
+            "drive_manifest_file_id": "manifest_file_id",
+            ...
+        }
     """
     try:
         service = get_drive_service()
@@ -380,18 +387,20 @@ def upload_run_outputs(
         run_output_dir = outdir / "outputs" / run_type / run_id
 
         files_to_upload = [
-            ("must_reads.json", run_output_dir / "must_reads.json"),
-            ("report.md", run_output_dir / "report.md"),
-            ("new.csv", run_output_dir / "new.csv"),
-            ("summaries.json", run_output_dir / "summaries.json"),
+            ("must_reads.json", run_output_dir / "must_reads.json", "must_reads"),
+            ("report.md", run_output_dir / "report.md", "report"),
+            ("new.csv", run_output_dir / "new.csv", "new"),
+            ("summaries.json", run_output_dir / "summaries.json", "summaries"),
         ]
 
         results = {}
         upload_failures = []
+        drive_output_paths = {}
+        drive_file_ids = {}
 
         print(f"\nUploading {run_type} run outputs to Drive: {run_type_folder}/{run_id}/")
 
-        for filename, local_path in files_to_upload:
+        for filename, local_path, key_name in files_to_upload:
             if not local_path.exists():
                 logger.warning("⚠️  File not found, skipping: %s", filename)
                 results[filename] = {"success": False, "error": "File not found"}
@@ -403,12 +412,18 @@ def upload_run_outputs(
 
             if result.get("success"):
                 print(f"  ✅ {filename}")
+                # Store Drive path and file ID
+                drive_output_paths[key_name] = f"{run_type_folder}/{run_id}/{filename}"
+                drive_file_ids[key_name] = result.get("file_id")
             else:
                 print(f"  ❌ {filename}: {result.get('error')}")
                 upload_failures.append(filename)
 
         # Upload manifest to manifests/<run_type>/<run_id>.json
         manifest_path = outdir / "manifests" / run_type / f"{run_id}.json"
+        drive_manifest_path = None
+        drive_manifest_file_id = None
+
         if manifest_path.exists():
             # Create manifests root folder
             manifests_root_id = ensure_subfolder(service, parent_folder_id, "Manifests")
@@ -421,12 +436,16 @@ def upload_run_outputs(
 
             if manifest_result.get("success"):
                 print(f"  ✅ manifest: Manifests/{run_type_folder}/{run_id}.json")
+                drive_manifest_path = f"Manifests/{run_type_folder}/{run_id}.json"
+                drive_manifest_file_id = manifest_result.get("file_id")
             else:
                 print(f"  ❌ manifest: {manifest_result.get('error')}")
                 upload_failures.append("manifest")
 
         # Upload latest pointer to manifests/<run_type>/latest.json
         latest_pointer_path = outdir / "manifests" / run_type / "latest.json"
+        drive_latest_pointer_file_id = None
+
         if latest_pointer_path.exists():
             latest_result = upload_or_update_file(
                 service, manifests_type_id, latest_pointer_path, "latest.json"
@@ -435,6 +454,7 @@ def upload_run_outputs(
 
             if latest_result.get("success"):
                 print(f"  ✅ latest pointer: Manifests/{run_type_folder}/latest.json")
+                drive_latest_pointer_file_id = latest_result.get("file_id")
             else:
                 print(f"  ❌ latest pointer: {latest_result.get('error')}")
                 upload_failures.append("latest_pointer")
@@ -442,6 +462,17 @@ def upload_run_outputs(
         results["_has_failures"] = len(upload_failures) > 0
         results["drive_path"] = f"{run_type_folder}/{run_id}/"
         results["folder_id"] = run_folder_id
+
+        # Add Drive paths and file IDs to results
+        results["drive_output_paths"] = drive_output_paths
+        results["drive_file_ids"] = drive_file_ids
+
+        if drive_manifest_path:
+            results["drive_manifest_path"] = drive_manifest_path
+            results["drive_manifest_file_id"] = drive_manifest_file_id
+
+        if drive_latest_pointer_file_id:
+            results["drive_latest_pointer_file_id"] = drive_latest_pointer_file_id
 
         if upload_failures:
             print(f"\n⚠️  {len(upload_failures)} file(s) failed to upload")

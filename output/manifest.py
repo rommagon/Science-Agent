@@ -30,6 +30,8 @@ def generate_run_manifest(
     config_path: Optional[str] = None,
     config_hash: Optional[str] = None,
     dedupe_stats: Optional[dict] = None,
+    drive_output_paths: Optional[Dict[str, str]] = None,
+    drive_file_ids: Optional[Dict[str, str]] = None,
 ) -> dict:
     """Generate a comprehensive run manifest.
 
@@ -44,13 +46,15 @@ def generate_run_manifest(
         deduplicated_count: Number after deduplication
         new_count: Number of new publications
         unchanged_count: Number of unchanged publications
-        output_paths: Dictionary of relative output paths
+        output_paths: Dictionary of relative local output paths
         scoring_info: Dictionary with relevancy/credibility versions/models
         active_sources: List of active source names
         source_stats: List of source-specific statistics
         config_path: Path to configuration file
         config_hash: SHA256 hash of configuration file
         dedupe_stats: Deduplication statistics
+        drive_output_paths: Dictionary of Drive output paths (e.g., "Daily/<run_id>/must_reads.json")
+        drive_file_ids: Dictionary of Drive file IDs for direct access
 
     Returns:
         Manifest dictionary
@@ -68,8 +72,16 @@ def generate_run_manifest(
             "new_count": new_count,
             "unchanged_count": unchanged_count,
         },
-        "output_paths": output_paths or {},
+        "local_output_paths": output_paths or {},
+        "output_paths": output_paths or {},  # Keep for backward compatibility
     }
+
+    # Add Drive paths and file IDs if provided
+    if drive_output_paths:
+        manifest["drive_output_paths"] = drive_output_paths
+
+    if drive_file_ids:
+        manifest["drive_file_ids"] = drive_file_ids
 
     # Optional fields
     if scoring_info:
@@ -141,14 +153,24 @@ def update_latest_pointer(
     """
     run_id = manifest["run_id"]
     run_type = manifest["run_type"]
+    run_type_capitalized = run_type.capitalize()  # "daily" -> "Daily", "weekly" -> "Weekly"
 
-    # Create latest pointer
+    # Create latest pointer with local paths
     latest_pointer = {
         "run_id": run_id,
         "generated_at": manifest["generated_at"],
-        "output_paths": manifest["output_paths"],
+        "local_output_paths": manifest.get("local_output_paths", {}),
+        "output_paths": manifest.get("output_paths", {}),  # Keep for backward compatibility
         "manifest_path": f"manifests/{run_type}/{run_id}.json",
     }
+
+    # Add Drive paths if available
+    if "drive_output_paths" in manifest:
+        latest_pointer["drive_output_paths"] = manifest["drive_output_paths"]
+        latest_pointer["drive_manifest_path"] = f"Manifests/{run_type_capitalized}/{run_id}.json"
+
+    if "drive_file_ids" in manifest:
+        latest_pointer["drive_file_ids"] = manifest["drive_file_ids"]
 
     # Save latest pointer
     manifests_dir = outdir / "manifests" / run_type
