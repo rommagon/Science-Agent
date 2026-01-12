@@ -510,39 +510,43 @@ def main() -> None:
     # Phase 1.7 (optional): Multi-lane expansion  ✅ FIXED: now runs regardless of DB insert result
     if ENABLE_EXPANSION:
         logger.info("Phase 1.7: Multi-lane expansion")
-        from ingest.expand import expand_papers
-
-        expanded_pubs, expansion_stats = expand_papers(
-            seed_publications=publications,
-            run_id=run_id,
-            since_date=since_date,
-        )
-
-        publications.extend(expanded_pubs)
-        logger.info("Expansion: discovered %d new papers", len(expanded_pubs))
-        for lane, count in expansion_stats.items():
-            logger.info("  - %s: %d papers", lane, count)
-
-        # Re-deduplicate (expansion may introduce duplicates)
-        publications, dedupe_stats_post_expansion = deduplicate_publications(publications)
-        logger.info(
-            "Post-expansion dedup: %d → %d (%d duplicates merged)",
-            dedupe_stats_post_expansion["total_input"],
-            dedupe_stats_post_expansion["total_output"],
-            dedupe_stats_post_expansion["duplicates_merged"],
-        )
-
-        # Store expanded publications (in case expansion discovered new IDs not present yet)
-        logger.info("Phase 1.7.5: Storing expanded publications to database")
-        db_result2 = store_publications(publications, run_id)
-        if db_result2["success"]:
-            logger.info(
-                "DB after expansion: %d inserted, %d duplicates",
-                db_result2["inserted"],
-                db_result2["duplicates"],
-            )
+        try:
+            from ingest.expand import expand_papers
+        except ImportError as e:
+            logger.warning("Expansion module not available: %s (skipping expansion)", e)
+            logger.info("Phase 1.7: Expansion disabled (module not found)")
         else:
-            logger.warning("DB store after expansion failed: %s (continuing)", db_result2["error"])
+            expanded_pubs, expansion_stats = expand_papers(
+                seed_publications=publications,
+                run_id=run_id,
+                since_date=since_date,
+            )
+
+            publications.extend(expanded_pubs)
+            logger.info("Expansion: discovered %d new papers", len(expanded_pubs))
+            for lane, count in expansion_stats.items():
+                logger.info("  - %s: %d papers", lane, count)
+
+            # Re-deduplicate (expansion may introduce duplicates)
+            publications, dedupe_stats_post_expansion = deduplicate_publications(publications)
+            logger.info(
+                "Post-expansion dedup: %d → %d (%d duplicates merged)",
+                dedupe_stats_post_expansion["total_input"],
+                dedupe_stats_post_expansion["total_output"],
+                dedupe_stats_post_expansion["duplicates_merged"],
+            )
+
+            # Store expanded publications (in case expansion discovered new IDs not present yet)
+            logger.info("Phase 1.7.5: Storing expanded publications to database")
+            db_result2 = store_publications(publications, run_id)
+            if db_result2["success"]:
+                logger.info(
+                    "DB after expansion: %d inserted, %d duplicates",
+                    db_result2["inserted"],
+                    db_result2["duplicates"],
+                )
+            else:
+                logger.warning("DB store after expansion failed: %s (continuing)", db_result2["error"])
     else:
         logger.info("Phase 1.7: Expansion disabled (ENABLE_EXPANSION=false)")
 
@@ -586,71 +590,75 @@ def main() -> None:
 
     if ENABLE_CREDIBILITY_SCORING and ENABLE_RELEVANCE_SCORING:
         logger.info("Phase 2.6: Two-stage cost control filtering")
-        from scoring.credibility import compute_credibility_score
-        from bibliometrics.adapters import enrich_publication
-        from diff.dedupe import extract_doi, extract_pmid
-
-        all_pubs_sorted = sorted(
-            changes["all_with_status"],
-            key=lambda p: p.get("relevance_score", 0),
-            reverse=True,
-        )
-        stage1_survivors = all_pubs_sorted[:STAGE1_TOP_K]
-        logger.info("Stage 1: kept top %d/%d by relevance", len(stage1_survivors), len(all_pubs_sorted))
-
-        stage2_candidates = stage1_survivors[:STAGE2_TOP_M]
-        stage2_pub_ids = {pub["id"] for pub in stage2_candidates}
-
-        for pub in stage2_candidates:
-            title_text = pub.get("title", "")
-            raw_text = pub.get("raw_text", "")
-            url = pub.get("url", "")
-
-            from acitrack_types import Publication
-            temp_pub = Publication(
-                id=pub["id"],
-                title=title_text,
-                authors=pub.get("authors", []),
-                source=pub.get("source", ""),
-                date=pub.get("date", ""),
-                url=url,
-                raw_text=raw_text,
-                summary="",
-                run_id=run_id,
+        try:
+            from scoring.credibility import compute_credibility_score
+            from bibliometrics.adapters import enrich_publication
+            from diff.dedupe import extract_doi, extract_pmid
+        except ImportError as e:
+            logger.warning("Credibility scoring modules not available: %s (skipping credibility scoring)", e)
+            logger.info("Phase 2.6: Credibility scoring disabled (modules not found)")
+        else:
+            all_pubs_sorted = sorted(
+                changes["all_with_status"],
+                key=lambda p: p.get("relevance_score", 0),
+                reverse=True,
             )
+            stage1_survivors = all_pubs_sorted[:STAGE1_TOP_K]
+            logger.info("Stage 1: kept top %d/%d by relevance", len(stage1_survivors), len(all_pubs_sorted))
 
-            doi = extract_doi(temp_pub)
-            pmid = extract_pmid(temp_pub)
+            stage2_candidates = stage1_survivors[:STAGE2_TOP_M]
+            stage2_pub_ids = {pub["id"] for pub in stage2_candidates}
 
-            biblio_metrics = enrich_publication(
-                doi=doi,
-                pmid=pmid,
-                title=title_text[:200],
-            )
+            for pub in stage2_candidates:
+                title_text = pub.get("title", "")
+                raw_text = pub.get("raw_text", "")
+                url = pub.get("url", "")
 
-            credibility = compute_credibility_score(
-                biblio_metrics=biblio_metrics,
-                title=title_text,
-                abstract=raw_text,
-                has_sponsor_signal=pub.get("has_sponsor_signal", False),
-                sponsor_names=pub.get("sponsor_names", []),
-            )
+                from acitrack_types import Publication
+                temp_pub = Publication(
+                    id=pub["id"],
+                    title=title_text,
+                    authors=pub.get("authors", []),
+                    source=pub.get("source", ""),
+                    date=pub.get("date", ""),
+                    url=url,
+                    raw_text=raw_text,
+                    summary="",
+                    run_id=run_id,
+                )
 
-            pub["credibility_score"] = credibility["score"]
-            pub["credibility_components"] = credibility.get("components", {})
-            pub["credibility_reason"] = credibility.get("reason", "")
+                doi = extract_doi(temp_pub)
+                pmid = extract_pmid(temp_pub)
 
-            # Persist identifiers when found
-            if doi:
-                pub["doi"] = doi
-            if biblio_metrics:
-                pub["citation_count"] = biblio_metrics.citation_count
-                pub["citations_per_year"] = biblio_metrics.citations_per_year
-                pub["venue_name"] = biblio_metrics.venue_name
-                pub["pub_type"] = biblio_metrics.pub_type
-                pub["doi"] = biblio_metrics.doi or pub.get("doi")
+                biblio_metrics = enrich_publication(
+                    doi=doi,
+                    pmid=pmid,
+                    title=title_text[:200],
+                )
 
-        logger.info("Stage 2: scored top %d papers with API-backed credibility", len(stage2_candidates))
+                credibility = compute_credibility_score(
+                    biblio_metrics=biblio_metrics,
+                    title=title_text,
+                    abstract=raw_text,
+                    has_sponsor_signal=pub.get("has_sponsor_signal", False),
+                    sponsor_names=pub.get("sponsor_names", []),
+                )
+
+                pub["credibility_score"] = credibility["score"]
+                pub["credibility_components"] = credibility.get("components", {})
+                pub["credibility_reason"] = credibility.get("reason", "")
+
+                # Persist identifiers when found
+                if doi:
+                    pub["doi"] = doi
+                if biblio_metrics:
+                    pub["citation_count"] = biblio_metrics.citation_count
+                    pub["citations_per_year"] = biblio_metrics.citations_per_year
+                    pub["venue_name"] = biblio_metrics.venue_name
+                    pub["pub_type"] = biblio_metrics.pub_type
+                    pub["doi"] = biblio_metrics.doi or pub.get("doi")
+
+            logger.info("Stage 2: scored top %d papers with API-backed credibility", len(stage2_candidates))
     else:
         for pub_dict in changes["all_with_status"]:
             pub_dict["credibility_score"] = 0
