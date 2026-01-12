@@ -95,7 +95,9 @@ def export_must_reads(
     since_days: int = 30,
     limit: int = 20,
     use_ai: bool = True,
-    output_dir: Path = Path("data/output")
+    output_dir: Path = Path("data/output"),
+    json_filename: str = "latest_must_reads.json",
+    md_filename: str = "latest_must_reads.md",
 ) -> dict:
     """Export must-reads to JSON and Markdown.
 
@@ -104,6 +106,8 @@ def export_must_reads(
         limit: Maximum number of results
         use_ai: Whether to use AI reranking (requires OPENAI_API_KEY)
         output_dir: Output directory for files
+        json_filename: Filename for JSON output (default: latest_must_reads.json)
+        md_filename: Filename for Markdown output (default: latest_must_reads.md)
 
     Returns:
         Dict with export status and paths
@@ -131,14 +135,14 @@ def export_must_reads(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Write JSON
-    json_path = output_dir / "latest_must_reads.json"
+    json_path = output_dir / json_filename
     with open(json_path, "w") as f:
         json.dump(must_reads_data, f, indent=2)
     logger.info("Wrote JSON to: %s", json_path)
 
     # Write Markdown
     md_content = format_markdown(must_reads_data)
-    md_path = output_dir / "latest_must_reads.md"
+    md_path = output_dir / md_filename
     with open(md_path, "w") as f:
         f.write(md_content)
     logger.info("Wrote Markdown to: %s", md_path)

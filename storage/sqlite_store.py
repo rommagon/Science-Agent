@@ -9,8 +9,6 @@ If the database fails, the pipeline continues normally with a warning.
 
 import logging
 import sqlite3
-from dataclasses import asdict
-from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -22,7 +20,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_PATH = "data/db/acitrack.db"
 
 # Schema version for future migrations
-SCHEMA_VERSION = 3  # Bumped for must-reads rerank cache
+SCHEMA_VERSION = 5  # Bumped for must-reads rerank cache + expansion fields
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
@@ -104,6 +102,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         cursor.execute("INSERT INTO schema_version (version) VALUES (4)")
         current_version = 4
 
+    if current_version < 5:
+        logger.info("Migrating schema from version %d to 5", current_version)
+        _migrate_to_v5(cursor)
+        cursor.execute("INSERT INTO schema_version (version) VALUES (5)")
+        current_version = 5
+
     conn.commit()
     logger.info("Database schema initialized (version %d)", current_version)
 
@@ -177,7 +181,6 @@ def _migrate_to_v3(cursor: sqlite3.Cursor) -> None:
     Args:
         cursor: Database cursor
     """
-    # Must-reads rerank cache table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS must_reads_rerank_cache (
             pub_id TEXT NOT NULL,
@@ -193,7 +196,6 @@ def _migrate_to_v3(cursor: sqlite3.Cursor) -> None:
         )
     """)
 
-    # Index for cache lookups
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_rerank_cache_created_at
         ON must_reads_rerank_cache(created_at)
@@ -210,7 +212,6 @@ def _migrate_to_v4(cursor: sqlite3.Cursor) -> None:
     Args:
         cursor: Database cursor
     """
-    # Must-reads summary cache table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS must_reads_summary_cache (
             pub_id TEXT NOT NULL,
@@ -226,13 +227,44 @@ def _migrate_to_v4(cursor: sqlite3.Cursor) -> None:
         )
     """)
 
-    # Index for cache lookups
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_summary_cache_created_at
         ON must_reads_summary_cache(created_at)
     """)
 
     logger.info("Schema migrated to version 4: added must_reads_summary_cache table")
+
+
+def _migrate_to_v5(cursor: sqlite3.Cursor) -> None:
+    """Migrate database schema to version 5.
+
+    Adds expansion and scoring fields to publications.
+
+    Args:
+        cursor: Database cursor
+    """
+    new_columns = [
+        ("doi", "TEXT"),
+        ("relevance_score", "INTEGER DEFAULT 0"),
+        ("credibility_score", "INTEGER DEFAULT 0"),
+        ("main_interesting_fact", "TEXT"),
+        ("relevance_to_spotitearly", "TEXT"),
+        ("modality_tags", "TEXT"),  # JSON array
+        ("sample_size", "INTEGER"),
+        ("study_type", "TEXT"),
+        ("key_metrics", "TEXT"),  # JSON dict
+        ("sponsor_flag", "INTEGER DEFAULT 0"),
+    ]
+
+    for col_name, col_type in new_columns:
+        try:
+            cursor.execute(f"ALTER TABLE publications ADD COLUMN {col_name} {col_type}")
+            logger.info("Added column: %s", col_name)
+        except sqlite3.OperationalError as e:
+            # Column might already exist (or older SQLite limitations)
+            logger.debug("Column %s: %s", col_name, e)
+
+    logger.info("Schema migrated to version 5: added expansion and scoring fields")
 
 
 def _get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -262,7 +294,11 @@ def _get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def store_publications(publications: List[Publication], run_id: str, db_path: str = DEFAULT_DB_PATH) -> dict:
+def store_publications(
+    publications: List[Publication],
+    run_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict:
     """Store publications in the SQLite database.
 
     This function is idempotent - duplicate publications (same ID) are ignored.
@@ -291,7 +327,7 @@ def store_publications(publications: List[Publication], run_id: str, db_path: st
             "total": 0,
             "inserted": 0,
             "duplicates": 0,
-            "error": None
+            "error": None,
         }
 
     try:
@@ -303,9 +339,8 @@ def store_publications(publications: List[Publication], run_id: str, db_path: st
 
         for pub in publications:
             try:
-                # Convert list fields to comma-separated strings for storage
                 authors_str = ", ".join(pub.authors) if pub.authors else ""
-                source_names_str = ", ".join(pub.source_names) if pub.source_names else ""
+                source_names_str = ", ".join(pub.source_names) if getattr(pub, "source_names", None) else ""
 
                 cursor.execute("""
                     INSERT OR IGNORE INTO publications (
@@ -317,13 +352,13 @@ def store_publications(publications: List[Publication], run_id: str, db_path: st
                     pub.title,
                     authors_str,
                     pub.source,
-                    pub.venue,
-                    pub.date,
-                    pub.url,
-                    pub.raw_text,
-                    pub.summary,
+                    getattr(pub, "venue", None),
+                    getattr(pub, "date", None),
+                    getattr(pub, "url", None),
+                    getattr(pub, "raw_text", None),
+                    getattr(pub, "summary", None),
                     run_id,
-                    source_names_str
+                    source_names_str,
                 ))
 
                 if cursor.rowcount > 0:
@@ -332,7 +367,7 @@ def store_publications(publications: List[Publication], run_id: str, db_path: st
                     duplicates += 1
 
             except sqlite3.Error as e:
-                logger.warning("Failed to insert publication %s: %s", pub.id, e)
+                logger.warning("Failed to insert publication %s: %s", getattr(pub, "id", "UNKNOWN"), e)
                 duplicates += 1
                 continue
 
@@ -343,7 +378,7 @@ def store_publications(publications: List[Publication], run_id: str, db_path: st
             "Stored publications to database: %d total, %d inserted, %d duplicates",
             len(publications),
             inserted,
-            duplicates
+            duplicates,
         )
 
         return {
@@ -351,7 +386,7 @@ def store_publications(publications: List[Publication], run_id: str, db_path: st
             "total": len(publications),
             "inserted": inserted,
             "duplicates": duplicates,
-            "error": None
+            "error": None,
         }
 
     except Exception as e:
@@ -361,7 +396,7 @@ def store_publications(publications: List[Publication], run_id: str, db_path: st
             "total": len(publications),
             "inserted": 0,
             "duplicates": 0,
-            "error": str(e)
+            "error": str(e),
         }
 
 
@@ -425,7 +460,7 @@ def store_run_history(
     summarized_count: int,
     upload_drive: bool,
     publications_with_status: list,
-    db_path: str = DEFAULT_DB_PATH
+    db_path: str = DEFAULT_DB_PATH,
 ) -> dict:
     """Store run history and per-run publication tracking.
 
@@ -472,7 +507,7 @@ def store_run_history(
             new_count,
             unchanged_count,
             summarized_count,
-            1 if upload_drive else 0
+            1 if upload_drive else 0,
         ))
 
         # Insert pub_runs entries
@@ -488,7 +523,7 @@ def store_run_history(
                     pub.get("id", ""),
                     pub.get("status", ""),
                     pub.get("source", ""),
-                    pub.get("date", "")
+                    pub.get("date", ""),
                 ))
                 if cursor.rowcount > 0:
                     pub_runs_inserted += 1
@@ -504,14 +539,14 @@ def store_run_history(
             run_id,
             new_count,
             unchanged_count,
-            pub_runs_inserted
+            pub_runs_inserted,
         )
 
         return {
             "success": True,
             "run_id": run_id,
             "pub_runs_inserted": pub_runs_inserted,
-            "error": None
+            "error": None,
         }
 
     except Exception as e:
@@ -520,7 +555,7 @@ def store_run_history(
             "success": False,
             "run_id": run_id,
             "pub_runs_inserted": 0,
-            "error": str(e)
+            "error": str(e),
         }
 
 
@@ -560,7 +595,7 @@ def get_run_history(limit: int = 10, db_path: str = DEFAULT_DB_PATH) -> List[dic
                 "new_count": row[7],
                 "unchanged_count": row[8],
                 "summarized_count": row[9],
-                "upload_drive": row[10] == 1
+                "upload_drive": row[10] == 1,
             })
 
         conn.close()

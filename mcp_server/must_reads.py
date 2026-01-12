@@ -189,6 +189,120 @@ def _generate_why_it_matters(
     return f"Flagged as must-read: {rank_reason}."
 
 
+def _normalize_relevancy_scores(must_reads: List[dict]) -> None:
+    """[DEPRECATED] Normalize score_total to 0-100 relevancy_score scale in-place.
+
+    This function is deprecated in favor of LLM-based relevancy scoring.
+    It remains for backwards compatibility with poc_v1 scoring.
+
+    Args:
+        must_reads: List of must-read dictionaries with score_total field
+    """
+    if not must_reads:
+        return
+
+    # Extract all score_total values
+    scores = [mr.get("score_total", 0) for mr in must_reads]
+    min_score = min(scores)
+    max_score = max(scores)
+
+    # Handle edge case: all scores are equal
+    if max_score == min_score:
+        for mr in must_reads:
+            mr["relevancy_score"] = 50
+    else:
+        # Normalize to 0-100 scale
+        for mr in must_reads:
+            score = mr.get("score_total", 0)
+            normalized = ((score - min_score) / (max_score - min_score)) * 100
+            mr["relevancy_score"] = round(normalized)
+
+
+def _score_relevancy_with_llm(must_reads: List[dict]) -> None:
+    """Score relevancy using LLM for each must_read item in-place.
+
+    Uses the llm_relevancy module to compute LLM-based relevancy scores.
+    Respects caching: items with scoring_version="poc_v2" are not re-scored.
+
+    Args:
+        must_reads: List of must-read dictionaries
+    """
+    if not must_reads:
+        return
+
+    try:
+        from mcp_server.llm_relevancy import score_relevancy
+
+        for mr in must_reads:
+            # Score item (will use cache if available)
+            result = score_relevancy(mr)
+
+            # Update item with LLM scoring results
+            mr["relevancy_score"] = result["relevancy_score"]
+            mr["relevancy_reason"] = result["relevancy_reason"]
+            mr["confidence"] = result["confidence"]
+            mr["signals"] = result.get("signals", {})
+            mr["scored_at"] = result["scored_at"]
+            mr["scoring_version"] = result["scoring_version"]
+            mr["scoring_model"] = result["scoring_model"]
+
+            # Log errors if present
+            if "error" in result:
+                logger.warning("LLM scoring error for item %s: %s",
+                             mr.get("id", "unknown"), result["error"])
+
+    except ImportError as e:
+        logger.error("Failed to import llm_relevancy module: %s", e)
+        # Fallback to deprecated heuristic scoring
+        logger.warning("Falling back to deprecated heuristic scoring (poc_v1)")
+        _normalize_relevancy_scores(must_reads)
+
+
+def _score_credibility_with_llm(must_reads: List[dict]) -> None:
+    """Score credibility using LLM + citation signals for each must_read item in-place.
+
+    Uses the llm_credibility module to compute credibility scores.
+    Respects caching: items with scoring_version="poc_v3" are not re-scored.
+    Updates scoring_version to "poc_v3" after credibility scoring.
+
+    Args:
+        must_reads: List of must-read dictionaries
+    """
+    if not must_reads:
+        return
+
+    try:
+        from mcp_server.llm_credibility import score_credibility
+
+        for mr in must_reads:
+            # Score credibility (will use cache if available)
+            result = score_credibility(mr)
+
+            # Update item with credibility scoring results
+            mr["credibility_score"] = result["credibility_score"]
+            mr["credibility_reason"] = result["credibility_reason"]
+            mr["credibility_confidence"] = result.get("credibility_confidence", "low")
+            mr["credibility_signals"] = result.get("credibility_signals", {})
+
+            # Update scoring_version to poc_v3 (indicates credibility scoring complete)
+            mr["scoring_version"] = result["scoring_version"]
+
+            # Log errors if present
+            if "error" in result:
+                logger.warning("Credibility scoring error for item %s: %s",
+                             mr.get("id", "unknown"), result["error"])
+
+    except ImportError as e:
+        logger.error("Failed to import llm_credibility module: %s", e)
+        logger.warning("Credibility scoring unavailable, leaving fields as placeholders")
+        # Keep credibility fields as placeholders (None/"")
+        for mr in must_reads:
+            if "credibility_score" not in mr:
+                mr["credibility_score"] = None
+            if "credibility_reason" not in mr:
+                mr["credibility_reason"] = ""
+
+
 def get_must_reads_from_db(
     db_path: str = "data/db/acitrack.db",
     since_days: int = 7,
@@ -437,6 +551,12 @@ def get_must_reads_from_db(
                 "confidence": confidence,
             })
 
+        # Score relevancy using LLM (replaces old heuristic normalization)
+        _score_relevancy_with_llm(must_reads_output)
+
+        # Score credibility using LLM + citation signals (after relevancy)
+        _score_credibility_with_llm(must_reads_output)
+
         return {
             "must_reads": must_reads_output,
             "generated_at": datetime.now().isoformat(),
@@ -529,28 +649,36 @@ def _fallback_must_reads(since_days: int, limit: int, use_ai: bool = True, reran
         ranked_pubs.sort(key=lambda x: x.rank_score, reverse=True)
         top_must_reads = ranked_pubs[:limit]
 
+        must_reads_list = [
+            {
+                "id": mr.id,
+                "title": mr.title,
+                "published_date": mr.published_date,
+                "source": mr.source,
+                "venue": mr.venue,
+                "url": mr.url,
+                "score_total": mr.rank_score,
+                "score_components": {
+                    "heuristic": mr.rank_score,
+                    "llm": None,
+                },
+                "explanation": mr.rank_reason,
+                "why_it_matters": mr.why_it_matters,
+                "key_findings": mr.key_findings,
+                "tags": [],
+                "confidence": None,
+            }
+            for mr in top_must_reads
+        ]
+
+        # Score relevancy using LLM (replaces old heuristic normalization)
+        _score_relevancy_with_llm(must_reads_list)
+
+        # Score credibility using LLM + citation signals (after relevancy)
+        _score_credibility_with_llm(must_reads_list)
+
         return {
-            "must_reads": [
-                {
-                    "id": mr.id,
-                    "title": mr.title,
-                    "published_date": mr.published_date,
-                    "source": mr.source,
-                    "venue": mr.venue,
-                    "url": mr.url,
-                    "score_total": mr.rank_score,
-                    "score_components": {
-                        "heuristic": mr.rank_score,
-                        "llm": None,
-                    },
-                    "explanation": mr.rank_reason,
-                    "why_it_matters": mr.why_it_matters,
-                    "key_findings": mr.key_findings,
-                    "tags": [],
-                    "confidence": None,
-                }
-                for mr in top_must_reads
-            ],
+            "must_reads": must_reads_list,
             "generated_at": datetime.now().isoformat(),
             "window_days": since_days,
             "total_candidates": total_candidates,

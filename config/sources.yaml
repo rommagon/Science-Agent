@@ -25,7 +25,7 @@ sources:
 
   - name: medRxiv (all)
     type: rss
-    url: https://connect.medrxiv.org/medrxiv_xml.php?subject=all
+    url: https://www.medrxiv.org/rss.xml
 
   # PubMed E-utilities sources
   - name: PubMed - cancer (broad)
