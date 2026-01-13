@@ -98,6 +98,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ACITRACK_LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '48' }}
           ACITRACK_WRITE_SHEETS: 'true'  # Enable Google Sheets integration for daily runs
+          ACITRACK_ENABLE_EXPANSION: 'true'
         run: |
           # Run in daily mode with lookback window
           # - LLM relevancy and credibility scoring enabled
