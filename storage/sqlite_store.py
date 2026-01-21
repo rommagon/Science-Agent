@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_PATH = "data/db/acitrack.db"
 
 # Schema version for future migrations
-SCHEMA_VERSION = 5  # Bumped for must-reads rerank cache + expansion fields
+SCHEMA_VERSION = 6  # Bumped for relevancy_scoring_events table
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
@@ -107,6 +107,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v5(cursor)
         cursor.execute("INSERT INTO schema_version (version) VALUES (5)")
         current_version = 5
+
+    if current_version < 6:
+        logger.info("Migrating schema from version %d to 6", current_version)
+        _migrate_to_v6(cursor)
+        cursor.execute("INSERT INTO schema_version (version) VALUES (6)")
+        current_version = 6
 
     conn.commit()
     logger.info("Database schema initialized (version %d)", current_version)
@@ -265,6 +271,60 @@ def _migrate_to_v5(cursor: sqlite3.Cursor) -> None:
             logger.debug("Column %s: %s", col_name, e)
 
     logger.info("Schema migrated to version 5: added expansion and scoring fields")
+
+
+def _migrate_to_v6(cursor: sqlite3.Cursor) -> None:
+    """Migrate database schema to version 6.
+
+    Adds relevancy_scoring_events table for tracking LLM-based relevancy scoring.
+
+    Args:
+        cursor: Database cursor
+    """
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS relevancy_scoring_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            publication_id TEXT NOT NULL,
+            source TEXT,
+            prompt_version TEXT NOT NULL,
+            model TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            relevancy_score INTEGER,
+            relevancy_reason TEXT,
+            confidence TEXT,
+            signals_json TEXT,
+            input_fingerprint TEXT,
+            raw_response_json TEXT,
+            latency_ms INTEGER,
+            cost_usd REAL,
+            UNIQUE(run_id, publication_id, prompt_version)
+        )
+    """)
+
+    # Indexes for common queries
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_relevancy_events_run_id
+        ON relevancy_scoring_events(run_id)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_relevancy_events_pub_id
+        ON relevancy_scoring_events(publication_id)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_relevancy_events_created_at
+        ON relevancy_scoring_events(created_at)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_relevancy_events_mode
+        ON relevancy_scoring_events(mode)
+    """)
+
+    logger.info("Schema migrated to version 6: added relevancy_scoring_events table")
 
 
 def _get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -604,3 +664,254 @@ def get_run_history(limit: int = 10, db_path: str = DEFAULT_DB_PATH) -> List[dic
     except Exception as e:
         logger.warning("Failed to get run history: %s", e)
         return []
+
+
+def store_relevancy_scoring_event(
+    run_id: str,
+    mode: str,
+    publication_id: str,
+    source: str,
+    prompt_version: str,
+    model: str,
+    relevancy_score: Optional[int],
+    relevancy_reason: str,
+    confidence: str,
+    signals: dict,
+    input_fingerprint: Optional[str] = None,
+    raw_response: Optional[dict] = None,
+    latency_ms: Optional[int] = None,
+    cost_usd: Optional[float] = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict:
+    """Store a relevancy scoring event to the database.
+
+    This function uses INSERT OR REPLACE to handle idempotency based on
+    the unique constraint (run_id, publication_id, prompt_version).
+
+    Args:
+        run_id: Run identifier (e.g., "daily-2026-01-20")
+        mode: Run mode ("daily" or "weekly")
+        publication_id: Publication identifier
+        source: Publication source
+        prompt_version: Scoring prompt version (e.g., "poc_v2")
+        model: LLM model used (e.g., "gpt-4o-mini")
+        relevancy_score: Score 0-100 or None if scoring failed
+        relevancy_reason: Explanation text
+        confidence: "low", "medium", or "high"
+        signals: Dict with structured signals (cancer_type, breath_based, etc.)
+        input_fingerprint: Optional hash of title+abstract for deduplication
+        raw_response: Optional dict of raw LLM response for debugging
+        latency_ms: Optional latency in milliseconds
+        cost_usd: Optional cost in USD
+        db_path: Path to database file
+
+    Returns:
+        Dictionary with storage result:
+        {
+            "success": bool,
+            "event_id": int or None,
+            "error": str or None
+        }
+    """
+    import json
+
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        # Convert signals dict to JSON string
+        signals_json = json.dumps(signals) if signals else None
+
+        # Convert raw_response dict to JSON string
+        raw_response_json = json.dumps(raw_response) if raw_response else None
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO relevancy_scoring_events (
+                run_id, mode, publication_id, source, prompt_version, model,
+                relevancy_score, relevancy_reason, confidence, signals_json,
+                input_fingerprint, raw_response_json, latency_ms, cost_usd
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            run_id,
+            mode,
+            publication_id,
+            source,
+            prompt_version,
+            model,
+            relevancy_score,
+            relevancy_reason,
+            confidence,
+            signals_json,
+            input_fingerprint,
+            raw_response_json,
+            latency_ms,
+            cost_usd,
+        ))
+
+        event_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        logger.debug("Stored relevancy scoring event: run_id=%s, pub_id=%s, score=%s",
+                    run_id, publication_id, relevancy_score)
+
+        return {
+            "success": True,
+            "event_id": event_id,
+            "error": None,
+        }
+
+    except Exception as e:
+        logger.warning("Failed to store relevancy scoring event: %s", e)
+        return {
+            "success": False,
+            "event_id": None,
+            "error": str(e),
+        }
+
+
+def get_relevancy_scores_for_run(
+    run_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict:
+    """Get all relevancy scoring events for a specific run.
+
+    Args:
+        run_id: Run identifier to query
+        db_path: Path to database file
+
+    Returns:
+        Dictionary mapping publication_id to scoring result:
+        {
+            "pub_id_1": {
+                "relevancy_score": 78,
+                "relevancy_reason": "...",
+                "confidence": "high",
+                "signals": {...},
+                "prompt_version": "poc_v2",
+                "model": "gpt-4o-mini",
+                "created_at": "2026-01-20T12:00:00",
+            },
+            ...
+        }
+    """
+    import json
+
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                publication_id, relevancy_score, relevancy_reason, confidence,
+                signals_json, prompt_version, model, created_at
+            FROM relevancy_scoring_events
+            WHERE run_id = ?
+        """, (run_id,))
+
+        results = {}
+        for row in cursor.fetchall():
+            pub_id = row[0]
+            signals = json.loads(row[4]) if row[4] else {}
+
+            results[pub_id] = {
+                "relevancy_score": row[1],
+                "relevancy_reason": row[2],
+                "confidence": row[3],
+                "signals": signals,
+                "prompt_version": row[5],
+                "model": row[6],
+                "created_at": row[7],
+            }
+
+        conn.close()
+        logger.debug("Retrieved %d relevancy scores for run_id=%s", len(results), run_id)
+        return results
+
+    except Exception as e:
+        logger.warning("Failed to get relevancy scores for run %s: %s", run_id, e)
+        return {}
+
+
+def export_relevancy_events_to_jsonl(
+    run_id: str,
+    output_path: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict:
+    """Export relevancy scoring events for a run to JSONL file.
+
+    Args:
+        run_id: Run identifier to export
+        output_path: Path to output JSONL file
+        db_path: Path to database file
+
+    Returns:
+        Dictionary with export statistics:
+        {
+            "success": bool,
+            "events_exported": int,
+            "output_path": str,
+            "error": str or None
+        }
+    """
+    import json
+
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                run_id, mode, publication_id, source, prompt_version, model,
+                created_at, relevancy_score, relevancy_reason, confidence,
+                signals_json, input_fingerprint, latency_ms, cost_usd
+            FROM relevancy_scoring_events
+            WHERE run_id = ?
+            ORDER BY created_at ASC
+        """, (run_id,))
+
+        # Ensure output directory exists
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        events_exported = 0
+        with open(output_path, "w", encoding="utf-8") as f:
+            for row in cursor.fetchall():
+                event = {
+                    "run_id": row[0],
+                    "mode": row[1],
+                    "publication_id": row[2],
+                    "source": row[3],
+                    "prompt_version": row[4],
+                    "model": row[5],
+                    "created_at": row[6],
+                    "relevancy_score": row[7],
+                    "relevancy_reason": row[8],
+                    "confidence": row[9],
+                    "signals": json.loads(row[10]) if row[10] else {},
+                    "input_fingerprint": row[11],
+                    "latency_ms": row[12],
+                    "cost_usd": row[13],
+                }
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+                events_exported += 1
+
+        conn.close()
+
+        logger.info("Exported %d relevancy events to %s", events_exported, output_path)
+
+        return {
+            "success": True,
+            "events_exported": events_exported,
+            "output_path": output_path,
+            "error": None,
+        }
+
+    except Exception as e:
+        logger.warning("Failed to export relevancy events: %s", e)
+        return {
+            "success": False,
+            "events_exported": 0,
+            "output_path": output_path,
+            "error": str(e),
+        }

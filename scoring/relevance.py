@@ -26,6 +26,11 @@ def compute_relevance_score(
     title: str,
     abstract: str,
     source: str = "",
+    pub_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    mode: Optional[str] = None,
+    store_to_db: bool = True,
+    db_path: str = "data/db/acitrack.db",
 ) -> Dict:
     """Compute relevance score for a publication.
 
@@ -33,6 +38,11 @@ def compute_relevance_score(
         title: Publication title
         abstract: Abstract or summary text
         source: Source name
+        pub_id: Publication ID (optional, for caching)
+        run_id: Run identifier (optional, for caching)
+        mode: Run mode (optional, for DB storage)
+        store_to_db: Whether to store to database
+        db_path: Path to database file
 
     Returns:
         Dictionary with keys:
@@ -69,6 +79,11 @@ def compute_relevance_score(
             title=title,
             abstract=abstract,
             source=source,
+            pub_id=pub_id,
+            run_id=run_id,
+            mode=mode,
+            store_to_db=store_to_db,
+            db_path=db_path,
         )
 
         # Map LLM response to expected format

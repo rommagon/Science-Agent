@@ -218,24 +218,39 @@ def _normalize_relevancy_scores(must_reads: List[dict]) -> None:
             mr["relevancy_score"] = round(normalized)
 
 
-def _score_relevancy_with_llm(must_reads: List[dict]) -> None:
+def _score_relevancy_with_llm(must_reads: List[dict], run_id: Optional[str] = None) -> None:
     """Score relevancy using LLM for each must_read item in-place.
 
     Uses the llm_relevancy module to compute LLM-based relevancy scores.
     Respects caching: items with scoring_version="poc_v2" are not re-scored.
 
+    IMPORTANT: If run_id is provided, this function will use the run cache which should
+    have been populated during Phase 2.5 of the pipeline. This prevents duplicate scoring.
+
     Args:
         must_reads: List of must-read dictionaries
+        run_id: Optional run identifier to use cache from Phase 2.5 scoring
     """
     if not must_reads:
         return
 
     try:
-        from mcp_server.llm_relevancy import score_relevancy
+        from mcp_server.llm_relevancy import score_relevancy, init_run_cache
+
+        # If run_id provided, load cache from database to avoid re-scoring
+        if run_id:
+            cache_loaded = init_run_cache(run_id)
+            logger.info("Loaded %d relevancy scores from run cache for must-reads", cache_loaded)
 
         for mr in must_reads:
             # Score item (will use cache if available)
-            result = score_relevancy(mr)
+            # NOTE: This should hit the run cache if run_id was provided and item was scored in Phase 2.5
+            result = score_relevancy(
+                mr,
+                run_id=run_id,
+                mode=None,  # Don't store again, already stored in Phase 2.5
+                store_to_db=False,  # Don't re-store to DB
+            )
 
             # Update item with LLM scoring results
             mr["relevancy_score"] = result["relevancy_score"]
@@ -309,6 +324,7 @@ def get_must_reads_from_db(
     limit: int = 10,
     use_ai: bool = True,
     rerank_max_candidates: int = 25,  # Reduced from 50 to ensure reliable parsing
+    run_id: Optional[str] = None,  # Optional run_id to use cached relevancy scores
 ) -> dict:
     """Retrieve must-reads from SQLite database with optional AI reranking.
 
@@ -318,6 +334,7 @@ def get_must_reads_from_db(
         limit: Maximum number of must-reads to return
         use_ai: Whether to use AI reranking (default: True, requires OPENAI_API_KEY)
         rerank_max_candidates: Max candidates to pass to AI reranker (default: 25)
+        run_id: Optional run identifier to load cached relevancy scores from Phase 2.5
 
     Returns:
         Dictionary with must_reads list and metadata
@@ -552,7 +569,8 @@ def get_must_reads_from_db(
             })
 
         # Score relevancy using LLM (replaces old heuristic normalization)
-        _score_relevancy_with_llm(must_reads_output)
+        # If run_id is provided, this will use cached scores from Phase 2.5
+        _score_relevancy_with_llm(must_reads_output, run_id=run_id)
 
         # Score credibility using LLM + citation signals (after relevancy)
         _score_credibility_with_llm(must_reads_output)

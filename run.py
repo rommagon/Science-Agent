@@ -162,7 +162,7 @@ def _default_db_path(outdir: Path) -> str:
     return str(outdir / "db" / "acitrack.db")
 
 
-def _to_text_field(value) -> str | None:
+def _to_text_field(value) -> Optional[str]:
     """Convert list/dict to a JSON string; leave strings untouched; None stays None."""
     if value is None:
         return None
@@ -561,16 +561,44 @@ def main() -> None:
     )
 
     # Phase 2.5 (optional): Relevance scoring
+    relevancy_cache_hits = 0
+    relevancy_cache_misses = 0
+
     if ENABLE_RELEVANCE_SCORING:
         logger.info("Phase 2.5: Computing relevance scores")
         from scoring.relevance import compute_relevance_score
+        from mcp_server.llm_relevancy import init_run_cache
+
+        # Get DB path for this run
+        db_path = _default_db_path(outdir)
+
+        # Initialize run cache from database
+        cache_loaded = init_run_cache(run_id, db_path=db_path)
+        logger.info("Loaded %d relevancy scores from cache for run_id=%s", cache_loaded, run_id)
 
         for pub_dict in changes["all_with_status"]:
+            # Check if we have a cached score before calling
+            pub_id = pub_dict.get("id", "")
+            has_cached = (pub_dict.get("scoring_version") == "poc_v2" and
+                         pub_dict.get("relevance_score") is not None)
+
             relevance = compute_relevance_score(
                 title=pub_dict.get("title", ""),
                 abstract=pub_dict.get("raw_text", ""),
                 source=pub_dict.get("source", ""),
+                pub_id=pub_id,
+                run_id=run_id,
+                mode=run_type if run_type else "legacy",
+                store_to_db=True,
+                db_path=db_path,
             )
+
+            # Track cache hits/misses
+            if has_cached or (relevance.get("score") is not None and cache_loaded > 0):
+                relevancy_cache_hits += 1
+            else:
+                relevancy_cache_misses += 1
+
             pub_dict["relevance_score"] = relevance["score"]
             pub_dict["relevance_reason"] = relevance.get("reason", "")
             pub_dict["matched_keywords"] = relevance.get("matched_keywords", [])
@@ -583,7 +611,8 @@ def main() -> None:
             pub_dict["relevance_score"] = 0
 
     if ENABLE_RELEVANCE_SCORING:
-        logger.info("Relevance scoring complete")
+        logger.info("Relevance scoring complete: %d scored (%d cache hits, %d cache misses)",
+                   len(changes["all_with_status"]), relevancy_cache_hits, relevancy_cache_misses)
 
     # Phase 2.6 (optional): Two-stage cost control + credibility scoring
     stage2_pub_ids = set()
@@ -860,6 +889,7 @@ def main() -> None:
                 output_dir=output_subdir,
                 json_filename=json_filename,
                 md_filename=md_filename,
+                run_id=run_id,  # Pass run_id to use cached relevancy scores
             )
             logger.info(
                 "Exported must-reads: %d items (used_ai=%s)",
@@ -885,6 +915,31 @@ def main() -> None:
             )
         except Exception as e:
             logger.warning("Failed to export summaries (continuing): %s", e)
+
+        # Export relevancy scoring events (if relevancy scoring is enabled)
+        if ENABLE_RELEVANCE_SCORING and run_id:
+            try:
+                from storage.sqlite_store import export_relevancy_events_to_jsonl
+
+                relevancy_events_filename = "relevancy_events.jsonl" if run_type else "latest_relevancy_events.jsonl"
+                relevancy_events_path = output_subdir / relevancy_events_filename
+
+                export_result = export_relevancy_events_to_jsonl(
+                    run_id=run_id,
+                    output_path=str(relevancy_events_path),
+                    db_path=_default_db_path(outdir),
+                )
+
+                if export_result["success"]:
+                    logger.info(
+                        "Exported relevancy events: %d events to %s",
+                        export_result["events_exported"],
+                        relevancy_events_path,
+                    )
+                else:
+                    logger.warning("Relevancy events export failed: %s", export_result.get("error", "Unknown"))
+            except Exception as e:
+                logger.warning("Failed to export relevancy events (continuing): %s", e)
 
         # Skip DB export for run_type mode (only needed for legacy mode)
         if not run_type:
@@ -920,6 +975,11 @@ def main() -> None:
                     "relevancy_version": REL_VERSION,
                     "credibility_version": CRED_VERSION,
                 }
+                # Add relevancy scoring metrics
+                if ENABLE_RELEVANCE_SCORING:
+                    scoring_info["relevancy_scoring_count"] = len(changes["all_with_status"])
+                    scoring_info["relevancy_cache_hits"] = relevancy_cache_hits
+                    scoring_info["relevancy_cache_misses"] = relevancy_cache_misses
             except:
                 pass
 
@@ -1004,6 +1064,11 @@ def main() -> None:
                                 "relevancy_version": REL_VERSION,
                                 "credibility_version": CRED_VERSION,
                             }
+                            # Add relevancy scoring metrics
+                            if ENABLE_RELEVANCE_SCORING:
+                                scoring_info["relevancy_scoring_count"] = len(changes["all_with_status"])
+                                scoring_info["relevancy_cache_hits"] = relevancy_cache_hits
+                                scoring_info["relevancy_cache_misses"] = relevancy_cache_misses
                         except:
                             pass
 

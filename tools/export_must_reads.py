@@ -98,6 +98,7 @@ def export_must_reads(
     output_dir: Path = Path("data/output"),
     json_filename: str = "latest_must_reads.json",
     md_filename: str = "latest_must_reads.md",
+    run_id: Optional[str] = None,
 ) -> dict:
     """Export must-reads to JSON and Markdown.
 
@@ -108,12 +109,13 @@ def export_must_reads(
         output_dir: Output directory for files
         json_filename: Filename for JSON output (default: latest_must_reads.json)
         md_filename: Filename for Markdown output (default: latest_must_reads.md)
+        run_id: Optional run identifier to load cached relevancy scores
 
     Returns:
         Dict with export status and paths
     """
-    logger.info("Generating must-reads (since_days=%d, limit=%d, use_ai=%s)",
-                since_days, limit, use_ai)
+    logger.info("Generating must-reads (since_days=%d, limit=%d, use_ai=%s, run_id=%s)",
+                since_days, limit, use_ai, run_id)
 
     # Generate must-reads
     try:
@@ -121,7 +123,8 @@ def export_must_reads(
             since_days=since_days,
             limit=limit,
             use_ai=use_ai,
-            rerank_max_candidates=25
+            rerank_max_candidates=25,
+            run_id=run_id,
         )
     except Exception as e:
         logger.error("Failed to generate must-reads: %s", e)
