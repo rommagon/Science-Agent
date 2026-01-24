@@ -7,7 +7,7 @@ This module contains versioned prompts for:
 
 All prompts enforce a strict JSON schema for structured output.
 """
-
+from typing import Optional
 # Shared review schema documentation
 REVIEW_SCHEMA_DOC = """
 OUTPUT SCHEMA (strict JSON):

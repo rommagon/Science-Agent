@@ -5,8 +5,16 @@ This script executes an experimental mini-daily run using three models:
 2. Gemini reviews papers
 3. GPT evaluates and produces final decision
 
+Two modes:
+A) Default: Fetch publications from RSS feeds (lookback window)
+B) --input-csv: Load candidates from a CSV file (e.g., from classic daily run)
+
 Usage:
+    # Mode A: Fetch from feeds
     python run_mini_daily.py [--lookback-hours N] [--max-papers N] [--upload-drive]
+
+    # Mode B: Use existing candidates
+    python run_mini_daily.py --input-csv data/outputs/daily/daily-YYYY-MM-DD/new.csv [--max-papers N]
 
 Environment variables:
     TRI_MODEL_MINI_DAILY=true (required)
@@ -16,8 +24,10 @@ Environment variables:
 """
 
 import argparse
+import csv
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -43,18 +53,125 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def load_papers_from_csv(csv_path: Path, max_papers: int) -> tuple[list, dict]:
+    """Load papers from CSV file (classic daily run output).
+
+    Args:
+        csv_path: Path to new.csv file
+        max_papers: Maximum papers to load
+
+    Returns:
+        (papers_list, metadata_dict)
+    """
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV file not found: {csv_path}")
+
+    papers = []
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            # Convert CSV row to publication dict
+            paper = {
+                "id": row.get("id", ""),
+                "title": row.get("title", ""),
+                "source": row.get("source", ""),
+                "date": row.get("date", ""),
+                "url": row.get("url", ""),
+                "one_liner": row.get("one_liner", ""),
+                "summary": "",  # Will populate from summaries.json
+                "raw_text": "",  # Will populate from summaries.json
+            }
+            papers.append(paper)
+
+            if len(papers) >= max_papers:
+                break
+
+    # Try to load summaries.json from same directory
+    summaries_path = csv_path.parent / "summaries.json"
+    missing_summary_count = 0
+
+    if summaries_path.exists():
+        logger.info("Loading summaries from: %s", summaries_path)
+        try:
+            with open(summaries_path, 'r', encoding='utf-8') as f:
+                summaries_data = json.load(f)
+
+            # Handle both dict and list formats
+            summaries_by_id = {}
+            if isinstance(summaries_data, dict):
+                # Could be {"summaries": [...]} or direct {id: {...}}
+                if "summaries" in summaries_data:
+                    for item in summaries_data["summaries"]:
+                        if "id" in item:
+                            summaries_by_id[item["id"]] = item
+                else:
+                    summaries_by_id = summaries_data
+            elif isinstance(summaries_data, list):
+                for item in summaries_data:
+                    if "id" in item:
+                        summaries_by_id[item["id"]] = item
+
+            # Populate summaries
+            for paper in papers:
+                pub_id = paper["id"]
+                if pub_id in summaries_by_id:
+                    summary_entry = summaries_by_id[pub_id]
+                    # Use summary or one_liner from summaries.json
+                    paper["summary"] = summary_entry.get("summary") or summary_entry.get("one_liner") or ""
+                    paper["raw_text"] = paper["summary"]  # Use as abstract
+                else:
+                    # Fallback to one_liner from CSV
+                    paper["summary"] = paper.get("one_liner", "")
+                    paper["raw_text"] = paper["summary"]
+                    missing_summary_count += 1
+
+            logger.info("Populated summaries: %d papers have summaries, %d missing",
+                       len(papers) - missing_summary_count, missing_summary_count)
+
+        except Exception as e:
+            logger.warning("Failed to load summaries.json: %s (falling back to one_liner)", e)
+            # Fallback: use one_liner as summary
+            for paper in papers:
+                paper["summary"] = paper.get("one_liner", "")
+                paper["raw_text"] = paper["summary"]
+            missing_summary_count = len(papers)
+    else:
+        logger.warning("summaries.json not found, using one_liner as fallback")
+        # Fallback: use one_liner as summary
+        for paper in papers:
+            paper["summary"] = paper.get("one_liner", "")
+            paper["raw_text"] = paper["summary"]
+        missing_summary_count = len(papers)
+
+    metadata = {
+        "source_csv": str(csv_path),
+        "total_loaded": len(papers),
+        "missing_summary_count": missing_summary_count,
+    }
+
+    return papers, metadata
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run mini-daily tri-model experiment")
+
+    # Mode selection
+    parser.add_argument("--input-csv", type=Path,
+                       help="Path to CSV file with candidates (skips fetch, uses existing papers)")
+
+    # Fetch mode parameters
     parser.add_argument("--lookback-hours", type=int, default=MINI_DAILY_WINDOW_HOURS,
-                       help=f"Lookback window in hours (default: {MINI_DAILY_WINDOW_HOURS})")
+                       help=f"Lookback window in hours (default: {MINI_DAILY_WINDOW_HOURS}, ignored if --input-csv)")
+    parser.add_argument("--config", type=str, default="config/sources.yaml",
+                       help="Sources configuration file (ignored if --input-csv)")
+
+    # Common parameters
     parser.add_argument("--max-papers", type=int, default=MINI_DAILY_MAX_PAPERS,
                        help=f"Maximum papers to review (default: {MINI_DAILY_MAX_PAPERS})")
     parser.add_argument("--upload-drive", action="store_true",
                        help="Upload outputs to Google Drive")
     parser.add_argument("--outdir", type=Path, default=Path("data"),
                        help="Output directory (default: data)")
-    parser.add_argument("--config", type=str, default="config/sources.yaml",
-                       help="Sources configuration file")
 
     args = parser.parse_args()
 
@@ -71,15 +188,20 @@ def main():
         logger.error("No reviewers available. Configure CLAUDE_API_KEY or GEMINI_API_KEY")
         sys.exit(1)
 
-    # Calculate window
+    # Determine mode
+    mode = "input-csv" if args.input_csv else "lookback"
     now = datetime.now(timezone.utc)
-    since_date = now - timedelta(hours=args.lookback_hours)
-    run_id = f"mini-daily-{now.strftime('%Y-%m-%d')}"
+    run_id = f"mini-daily-{now.strftime('%Y-%m-%d-%H%M')}"
 
     logger.info("=" * 80)
     logger.info("Mini-Daily Tri-Model Run: %s", run_id)
-    logger.info("Window: %s to %s (%d hours)",
-                since_date.isoformat(), now.isoformat(), args.lookback_hours)
+    logger.info("Mode: %s", mode)
+    if mode == "input-csv":
+        logger.info("Input CSV: %s", args.input_csv)
+    else:
+        since_date = now - timedelta(hours=args.lookback_hours)
+        logger.info("Window: %s to %s (%d hours)",
+                    since_date.isoformat(), now.isoformat(), args.lookback_hours)
     logger.info("Max papers: %d", args.max_papers)
     logger.info("=" * 80)
 
@@ -90,40 +212,75 @@ def main():
     manifest_dir = args.outdir / "manifests" / "mini-daily"
     manifest_dir.mkdir(parents=True, exist_ok=True)
 
-    # Phase 1: Fetch publications
-    logger.info("Phase 1: Fetching publications...")
+    logger.info("Output directory: %s", output_dir)
 
-    # Load sources
-    import yaml
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
-    sources = config.get("sources", [])
+    # Get papers based on mode
+    papers_to_review = []
+    source_metadata = {}
 
-    publications, source_stats = fetch_publications(
-        sources=sources,
-        since_date=since_date,
-        run_id=run_id,
-        outdir=args.outdir,
-    )
+    if mode == "input-csv":
+        # Mode B: Load from CSV
+        logger.info("Phase 1: Loading papers from CSV...")
+        try:
+            papers_to_review, csv_metadata = load_papers_from_csv(args.input_csv, args.max_papers)
+            source_metadata = csv_metadata
+            logger.info("Loaded %d candidates from CSV, usable: %d",
+                       csv_metadata["total_loaded"], len(papers_to_review))
+        except Exception as e:
+            logger.error("Failed to load CSV: %s", e)
+            # Write empty outputs
+            _write_empty_outputs(output_dir, manifest_dir, run_id, mode, args, error=str(e))
+            sys.exit(1)
+    else:
+        # Mode A: Fetch from feeds
+        logger.info("Phase 1: Fetching publications...")
+        since_date = now - timedelta(hours=args.lookback_hours)
 
-    logger.info("Fetched %d publications from %d sources", len(publications), len(source_stats))
+        # Load sources
+        import yaml
+        with open(args.config) as f:
+            config = yaml.safe_load(f)
+        sources = config.get("sources", [])
 
-    # Phase 2: Deduplicate
-    logger.info("Phase 2: Deduplicating...")
-    dedupe_result = deduplicate_publications(publications)
-    deduped_pubs = dedupe_result["unique_publications"]
+        publications, source_stats = fetch_publications(
+            sources=sources,
+            since_date=since_date,
+            run_id=run_id,
+            outdir=args.outdir,
+        )
 
-    logger.info("After deduplication: %d unique publications", len(deduped_pubs))
+        logger.info("Fetched %d publications from %d sources", len(publications), len(source_stats))
 
-    # Phase 3: Select papers for review (limit to max_papers, sorted by date)
-    sorted_pubs = sorted(
-        deduped_pubs,
-        key=lambda p: p.get("date", ""),
-        reverse=True
-    )
-    papers_to_review = sorted_pubs[:args.max_papers]
+        # Phase 2: Deduplicate
+        logger.info("Phase 2: Deduplicating...")
+        dedupe_result = deduplicate_publications(publications)
+        deduped_pubs = dedupe_result["unique_publications"]
+
+        logger.info("After deduplication: %d unique publications", len(deduped_pubs))
+
+        # Phase 3: Select papers for review (limit to max_papers, sorted by date)
+        sorted_pubs = sorted(
+            deduped_pubs,
+            key=lambda p: p.get("date", ""),
+            reverse=True
+        )
+        papers_to_review = sorted_pubs[:args.max_papers]
+
+        source_metadata = {
+            "fetched": len(publications),
+            "deduplicated": len(deduped_pubs),
+            "sources_count": len(source_stats),
+        }
 
     logger.info("Selected %d papers for tri-model review", len(papers_to_review))
+
+    # Check if we have usable papers
+    if not papers_to_review:
+        logger.warning("No papers to review!")
+        _write_empty_outputs(output_dir, manifest_dir, run_id, mode, args,
+                            source_metadata=source_metadata,
+                            reason="No papers available for review")
+        return
 
     # Phase 4: Tri-model review
     logger.info("Phase 4: Running tri-model reviews...")
@@ -229,6 +386,7 @@ def main():
         json.dump({
             "run_id": run_id,
             "generated_at": now.isoformat(),
+            "mode": mode,
             "reviewers_used": reviewers,
             "total_reviewed": len(tri_model_reviews),
             "reviews": tri_model_reviews,
@@ -241,6 +399,7 @@ def main():
         json.dump({
             "run_id": run_id,
             "generated_at": now.isoformat(),
+            "mode": mode,
             "total_evaluated": len(final_decisions),
             "final_decisions": final_decisions,
         }, f, indent=2)
@@ -252,8 +411,8 @@ def main():
         json.dump({
             "run_id": run_id,
             "generated_at": now.isoformat(),
-            "window_hours": args.lookback_hours,
-            "total_candidates": len(final_decisions),
+            "mode": mode,
+            "total_candidates": len(papers_to_review),
             "must_reads": must_reads,
         }, f, indent=2)
     logger.info("Wrote: %s", must_reads_path)
@@ -263,7 +422,9 @@ def main():
     with open(report_path, "w") as f:
         f.write(f"# Mini-Daily Tri-Model Run: {run_id}\n\n")
         f.write(f"**Generated:** {now.isoformat()}\n\n")
-        f.write(f"**Window:** {args.lookback_hours} hours ({since_date.isoformat()} to {now.isoformat()})\n\n")
+        f.write(f"**Mode:** {mode}\n\n")
+        if mode == "input-csv":
+            f.write(f"**Input CSV:** {args.input_csv}\n\n")
         f.write(f"**Reviewers Used:** {', '.join(reviewers)}\n\n")
         f.write(f"**Papers Reviewed:** {len(final_decisions)}\n\n")
         f.write(f"**Must-Reads Selected:** {len(must_reads)}\n\n")
@@ -282,13 +443,10 @@ def main():
     manifest = {
         "run_id": run_id,
         "run_type": "mini-daily",
+        "mode": mode,
         "generated_at": now.isoformat(),
-        "window_start": since_date.isoformat(),
-        "window_end": now.isoformat(),
-        "window_hours": args.lookback_hours,
         "counts": {
-            "fetched": len(publications),
-            "deduplicated": len(deduped_pubs),
+            "candidates": len(papers_to_review),
             "reviewed": len(final_decisions),
             "must_reads": len(must_reads),
         },
@@ -300,6 +458,9 @@ def main():
             "report": str(report_path.relative_to(args.outdir)),
         },
     }
+
+    # Add source-specific metadata
+    manifest.update(source_metadata)
 
     manifest_path = manifest_dir / f"{run_id}.json"
     with open(manifest_path, "w") as f:
@@ -367,9 +528,71 @@ def main():
     logger.info("=" * 80)
     logger.info("Mini-Daily Tri-Model Run Complete!")
     logger.info("Run ID: %s", run_id)
+    logger.info("Mode: %s", mode)
     logger.info("Output Directory: %s", output_dir)
-    logger.info("Must-Reads: %d papers", len(must_reads))
+    logger.info("Loaded: %d candidates, Usable: %d, Must-Reads: %d papers",
+                len(papers_to_review), len(final_decisions), len(must_reads))
     logger.info("=" * 80)
+
+
+def _write_empty_outputs(output_dir, manifest_dir, run_id, mode, args, source_metadata=None, error=None, reason=None):
+    """Write empty output files when no papers are available."""
+    now = datetime.now(timezone.utc)
+
+    # Create directories
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write empty must_reads.json
+    must_reads_path = output_dir / "must_reads.json"
+    with open(must_reads_path, "w") as f:
+        json.dump({
+            "run_id": run_id,
+            "generated_at": now.isoformat(),
+            "mode": mode,
+            "total_candidates": 0,
+            "must_reads": [],
+            "reason": reason or error or "No papers available",
+        }, f, indent=2)
+
+    # Write empty report.md
+    report_path = output_dir / "report.md"
+    with open(report_path, "w") as f:
+        f.write(f"# Mini-Daily Tri-Model Run: {run_id}\n\n")
+        f.write(f"**Generated:** {now.isoformat()}\n\n")
+        f.write(f"**Mode:** {mode}\n\n")
+        f.write(f"**Status:** No papers available for review\n\n")
+        if reason:
+            f.write(f"**Reason:** {reason}\n\n")
+        if error:
+            f.write(f"**Error:** {error}\n\n")
+
+    # Write manifest
+    manifest = {
+        "run_id": run_id,
+        "run_type": "mini-daily",
+        "mode": mode,
+        "generated_at": now.isoformat(),
+        "counts": {
+            "candidates": 0,
+            "reviewed": 0,
+            "must_reads": 0,
+        },
+        "status": "no_papers",
+        "reason": reason or error or "No papers available",
+    }
+
+    if source_metadata:
+        manifest.update(source_metadata)
+
+    if error:
+        manifest["error"] = error
+
+    manifest_path = manifest_dir / f"{run_id}.json"
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    logger.info("Wrote empty outputs to: %s", output_dir)
 
 
 if __name__ == "__main__":

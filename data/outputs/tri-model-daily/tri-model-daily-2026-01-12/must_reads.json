@@ -1,0 +1,73 @@
+{
+  "run_id": "tri-model-daily-2026-01-12",
+  "generated_at": "2026-01-22T17:09:46.491656",
+  "total_candidates": 50,
+  "must_reads_count": 5,
+  "must_reads": [
+    {
+      "id": "35dfca95772c87ba8af41e702dbb0006bbac8390e89d635a144bfdf8e88254b7",
+      "title": "Improving Lung Cancer Screening at a Safety-Net Hospital: Empowering At-risk Patients Through Self-identification",
+      "source": "BMC Cancer",
+      "published_date": "2026-01-10T00:00:00",
+      "final_relevancy_score": 50,
+      "final_relevancy_reason": "Both reviews recognize the publication's focus on lung cancer screening and early detection, but they agree that it lacks novel detection methodologies. The emphasis on patient self-identification and access improvement does not align with SpotItEarly's mission of advancing innovative detection techniques.",
+      "final_summary": "The study aims to enhance lung cancer screening accessibility through patient self-identification, which is relevant to early detection. However, it does not propose new detection technologies, limiting its alignment with SpotItEarly's mission.",
+      "agreement_level": "high",
+      "confidence": "medium",
+      "claude_score": 45,
+      "gemini_score": 55
+    },
+    {
+      "id": "73ebc68ab053706b717ce3360370ceafe1533a2713eda15f5d8c8fcc0038c181",
+      "title": "Establishing reference interval of serum CA-125 for the healthy Han population in China",
+      "source": "BMC Cancer",
+      "published_date": "2026-01-12T00:00:00",
+      "final_relevancy_score": 43,
+      "final_relevancy_reason": "Both reviews highlight the establishment of CA-125 reference intervals as relevant to cancer detection, particularly for ovarian cancer. However, neither presents novel detection methodologies or a strong focus on early detection, leading to a consensus that the publication's relevance to SpotItEarly's mission is limited.",
+      "final_summary": "The publication establishes important reference intervals for CA-125 in a specific population, which may aid in clinical interpretation. However, it does not advance early cancer detection methodologies, limiting its direct relevance to SpotItEarly's mission.",
+      "agreement_level": "high",
+      "confidence": "high",
+      "claude_score": 45,
+      "gemini_score": 40
+    },
+    {
+      "id": "6fe35bc7a14533ae110b064eb9c4dfd6245cf93bfb98bd5d6c5de1c7e102ef90",
+      "title": "Adaptive ensemble learning for prostate cancer classification on multi-modal MRI: reducing unnecessary biopsies",
+      "source": "BMC Cancer",
+      "published_date": "2026-01-12T00:00:00",
+      "final_relevancy_score": 42,
+      "final_relevancy_reason": "Both reviews highlight the focus on prostate cancer classification using MRI, which aligns with early detection efforts. However, the lack of innovative detection methodologies such as breath-based or genomic approaches limits its relevance to SpotItEarly's mission. The study primarily optimizes existing diagnostic pathways rather than introducing breakthrough detection innovations.",
+      "final_summary": "The publication presents an adaptive ensemble learning model for prostate cancer classification aimed at reducing unnecessary biopsies. While it contributes to early detection through improved diagnostic accuracy, it does not introduce novel detection methodologies that are critical to SpotItEarly's mission.",
+      "agreement_level": "high",
+      "confidence": "high",
+      "claude_score": 45,
+      "gemini_score": 40
+    },
+    {
+      "id": "3768c77158f0a17a9315ceec7889bf57d053d3d5fb544b6c0edd56475c827b57",
+      "title": "Comparing the clinical accuracy of urine exfoliated cell examination and fluorescence in situ hybridization in the diagnosis of upper urinary tract urothelial carcinoma",
+      "source": "BMC Urology",
+      "published_date": "2026-01-12T00:00:00",
+      "final_relevancy_score": 42,
+      "final_relevancy_reason": "Both reviews indicate that the publication focuses on a non-priority cancer type for SpotItEarly and employs conventional detection methods. However, the emphasis on early detection warrants a moderate relevancy score despite the lack of novel technologies.",
+      "final_summary": "The study evaluates established methods for diagnosing upper urinary tract urothelial carcinoma, which is not a priority for SpotItEarly. While it touches on early detection, it lacks innovative methodologies that align with the organization's mission.",
+      "agreement_level": "moderate",
+      "confidence": "high",
+      "claude_score": 35,
+      "gemini_score": 50
+    },
+    {
+      "id": "f364aa60b0e4595831d129de89e76db61d3b34aeb6630a6cf1566711a23dd18b",
+      "title": "Transfer learning with Bayesian optimization for colorectal cancer histopathology classification",
+      "source": "BMC Cancer",
+      "published_date": "2026-01-12T00:00:00",
+      "final_relevancy_score": 40,
+      "final_relevancy_reason": "Both reviews indicate that the publication focuses on computational methods for colorectal cancer classification without addressing early detection, which is central to SpotItEarly's mission. The scores are close enough to indicate moderate agreement, but the lack of innovation in detection methods limits its relevance.",
+      "final_summary": "The study employs transfer learning and Bayesian optimization for classifying colorectal cancer histopathology images, but it does not contribute to early detection methodologies. Therefore, it does not align with the mission of SpotItEarly.",
+      "agreement_level": "moderate",
+      "confidence": "high",
+      "claude_score": 45,
+      "gemini_score": 35
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "run_id": "mini-daily-2026-01-21-2256",
+  "run_type": "mini-daily",
+  "mode": "input-csv",
+  "generated_at": "2026-01-21T22:56:29.215529+00:00",
+  "counts": {
+    "candidates": 3,
+    "reviewed": 3,
+    "must_reads": 3
+  },
+  "reviewers_used": [
+    "claude",
+    "gemini"
+  ],
+  "local_output_paths": {
+    "tri_model_reviews": "outputs/mini-daily/mini-daily-2026-01-21-2256/tri_model_reviews.json",
+    "tri_model_final": "outputs/mini-daily/mini-daily-2026-01-21-2256/tri_model_final.json",
+    "must_reads": "outputs/mini-daily/mini-daily-2026-01-21-2256/must_reads.json",
+    "report": "outputs/mini-daily/mini-daily-2026-01-21-2256/report.md"
+  },
+  "source_csv": "data/outputs/daily/daily-2026-01-12/new.csv",
+  "total_loaded": 3,
+  "missing_summary_count": 3
+}

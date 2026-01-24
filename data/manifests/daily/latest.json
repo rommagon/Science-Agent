@@ -1,0 +1,32 @@
+{
+  "run_id": "daily-2026-01-12",
+  "generated_at": "2026-01-12T16:33:56.887999",
+  "local_output_paths": {
+    "must_reads_json": "data/outputs/daily/daily-2026-01-12/must_reads.json",
+    "report_md": "data/outputs/daily/daily-2026-01-12/report.md",
+    "new_csv": "data/outputs/daily/daily-2026-01-12/new.csv",
+    "manifest_json": "data/manifests/daily/daily-2026-01-12.json",
+    "summaries_json": "data/outputs/daily/daily-2026-01-12/summaries.json"
+  },
+  "output_paths": {
+    "must_reads_json": "data/outputs/daily/daily-2026-01-12/must_reads.json",
+    "report_md": "data/outputs/daily/daily-2026-01-12/report.md",
+    "new_csv": "data/outputs/daily/daily-2026-01-12/new.csv",
+    "manifest_json": "data/manifests/daily/daily-2026-01-12.json",
+    "summaries_json": "data/outputs/daily/daily-2026-01-12/summaries.json"
+  },
+  "manifest_path": "manifests/daily/daily-2026-01-12.json",
+  "drive_output_paths": {
+    "must_reads": "Daily/daily-2026-01-12/must_reads.json",
+    "report": "Daily/daily-2026-01-12/report.md",
+    "new": "Daily/daily-2026-01-12/new.csv",
+    "summaries": "Daily/daily-2026-01-12/summaries.json"
+  },
+  "drive_manifest_path": "Manifests/Daily/daily-2026-01-12.json",
+  "drive_file_ids": {
+    "must_reads": "15AvkSc68j_4gKVHeal6390cS3ZQZhBWm",
+    "report": "1XUSi6-UHOnuN9ENSJWHeqAPOkR2bjfWq",
+    "new": "1yVlZ8WKbvHy3UEAoBGSMRiuex4H8_dXC",
+    "summaries": "1pvo4hhKc0J1dZ5GZ6u26VMf_iZ5FdDuY"
+  }
+}

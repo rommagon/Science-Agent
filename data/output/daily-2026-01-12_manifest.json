@@ -1,7 +1,7 @@
 {
-  "run_id": "weekly-2026-03",
-  "timestamp": "2026-01-12T22:27:05.613920",
-  "since_date": "2026-01-06",
+  "run_id": "daily-2026-01-12",
+  "timestamp": "2026-01-12T16:31:29.165156",
+  "since_date": "2026-01-10",
   "config": {
     "path": "config/sources.yaml",
     "sha256": "a8791fa61e443a44769e8622d90c7716b0b049e5e60e1be87a549d11b13d5156"
@@ -37,14 +37,14 @@
       "name": "Nature Cancer",
       "type": "rss",
       "url": "https://www.nature.com/natcancer.rss",
-      "kept": 7,
+      "kept": 0,
       "missing_date_count": 0
     },
     {
       "name": "Science News",
       "type": "rss",
       "url": "https://www.science.org/rss/news_current.xml",
-      "kept": 10,
+      "kept": 1,
       "missing_date_count": 0
     },
     {
@@ -66,8 +66,8 @@
       "type": "pubmed",
       "query": "cancer",
       "retmax": 200,
-      "kept": 165,
-      "missing_date_count": 2
+      "kept": 196,
+      "missing_date_count": 8
     },
     {
       "name": "Journal of the American Osteopathic Association",
@@ -82,7 +82,7 @@
       "type": "pubmed",
       "query": "journal:\"PLoS One\"",
       "retmax": 200,
-      "kept": 5,
+      "kept": 0,
       "missing_date_count": 0
     },
     {
@@ -90,7 +90,7 @@
       "type": "pubmed",
       "query": "journal:\"European Journal of Cardio-Thoracic Surgery\"",
       "retmax": 200,
-      "kept": 7,
+      "kept": 0,
       "missing_date_count": 0
     },
     {
@@ -106,7 +106,7 @@
       "type": "pubmed",
       "query": "journal:\"The Journal of Urology\"",
       "retmax": 200,
-      "kept": 1,
+      "kept": 0,
       "missing_date_count": 0
     },
     {
@@ -114,7 +114,7 @@
       "type": "pubmed",
       "query": "journal:\"BMC Cancer\"",
       "retmax": 200,
-      "kept": 59,
+      "kept": 0,
       "missing_date_count": 0
     },
     {
@@ -130,7 +130,7 @@
       "type": "pubmed",
       "query": "journal:\"European Respiratory Journal\"",
       "retmax": 200,
-      "kept": 21,
+      "kept": 3,
       "missing_date_count": 0
     },
     {
@@ -138,7 +138,7 @@
       "type": "pubmed",
       "query": "journal:\"European Urology\"",
       "retmax": 200,
-      "kept": 14,
+      "kept": 3,
       "missing_date_count": 0
     },
     {
@@ -146,8 +146,8 @@
       "type": "pubmed",
       "query": "journal:\"Gut\"",
       "retmax": 200,
-      "kept": 178,
-      "missing_date_count": 14
+      "kept": 35,
+      "missing_date_count": 6
     },
     {
       "name": "Journal of Veterinary Behavior",
@@ -162,7 +162,7 @@
       "type": "pubmed",
       "query": "journal:\"Integrative Cancer Therapies\"",
       "retmax": 200,
-      "kept": 9,
+      "kept": 2,
       "missing_date_count": 0
     },
     {
@@ -170,7 +170,7 @@
       "type": "pubmed",
       "query": "journal:\"British Medical Journal\"",
       "retmax": 200,
-      "kept": 74,
+      "kept": 2,
       "missing_date_count": 0
     },
     {
@@ -178,7 +178,7 @@
       "type": "pubmed",
       "query": "journal:\"Applied Animal Behaviour Science\"",
       "retmax": 200,
-      "kept": 2,
+      "kept": 0,
       "missing_date_count": 0
     },
     {
@@ -186,7 +186,7 @@
       "type": "pubmed",
       "query": "journal:\"The Lancet\"",
       "retmax": 200,
-      "kept": 17,
+      "kept": 1,
       "missing_date_count": 0
     },
     {
@@ -202,8 +202,8 @@
       "type": "pubmed",
       "query": "journal:\"Biology\"",
       "retmax": 200,
-      "kept": 161,
-      "missing_date_count": 2
+      "kept": 0,
+      "missing_date_count": 0
     },
     {
       "name": "Acta Oncologica",
@@ -218,28 +218,28 @@
       "type": "pubmed",
       "query": "journal:\"BMC Urology\"",
       "retmax": 200,
-      "kept": 16,
+      "kept": 0,
       "missing_date_count": 0
     }
   ],
   "counts": {
-    "total_fetched": 773,
-    "total_new": 107,
-    "total_unchanged": 666
+    "total_fetched": 302,
+    "total_new": 17,
+    "total_unchanged": 285
   },
   "outputs": {
-    "publications_json": "data/raw/weekly-2026-03_publications.json",
-    "changes_json": "data/raw/weekly-2026-03_changes.json",
-    "report_md": "data/output/weekly-2026-03_report.md",
-    "new_csv": "data/output/weekly-2026-03_new.csv",
-    "manifest_json": "data/output/weekly-2026-03_manifest.json",
+    "publications_json": "data/raw/daily-2026-01-12_publications.json",
+    "changes_json": "data/raw/daily-2026-01-12_changes.json",
+    "report_md": "data/output/daily-2026-01-12_report.md",
+    "new_csv": "data/output/daily-2026-01-12_new.csv",
+    "manifest_json": "data/output/daily-2026-01-12_manifest.json",
     "latest_report_md": "data/output/latest_report.md",
     "latest_new_csv": "data/output/latest_new.csv",
     "latest_manifest_json": "data/output/latest_manifest.json"
   },
   "deduplication": {
-    "total_fetched_raw": 778,
-    "deduped_total": 731,
-    "duplicates_merged": 47
+    "total_fetched_raw": 275,
+    "deduped_total": 267,
+    "duplicates_merged": 8
   }
 }

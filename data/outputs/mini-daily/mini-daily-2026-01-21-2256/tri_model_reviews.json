@@ -1,0 +1,263 @@
+{
+  "run_id": "mini-daily-2026-01-21-2256",
+  "generated_at": "2026-01-21T22:56:29.215529+00:00",
+  "mode": "input-csv",
+  "reviewers_used": [
+    "claude",
+    "gemini"
+  ],
+  "total_reviewed": 3,
+  "reviews": [
+    {
+      "publication_id": "3b697fec797867d8d303806918788e2b3d8c4d5df19ab14a17e54fc4655d05c5",
+      "title": "Identification of a Novel miRNA Expression Signature for Lung Adenocarcinoma Using Systematic Machine Learning Optimization",
+      "source": "bioRxiv (all)",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.10.698764v1?rss=1",
+      "claude_review": {
+        "success": true,
+        "review": {
+          "relevancy_score": 55,
+          "relevancy_reason": "This study focuses on lung adenocarcinoma (35 points) and uses NGS/genomics for miRNA expression profiling (+10 points). However, it appears to be primarily computational/machine learning-based (-15 points) without clear evidence of novel detection methodology or early detection focus.",
+          "signals": {
+            "cancer_type": "lung",
+            "breath_based": false,
+            "sensor_based": false,
+            "animal_model": false,
+            "ngs_genomics": true,
+            "early_detection_focus": false
+          },
+          "summary": "The study develops a miRNA expression signature for lung adenocarcinoma using machine learning optimization approaches. It focuses on identifying molecular biomarkers through computational analysis of genomic data. The work appears to be primarily bioinformatic without experimental validation of detection methods.",
+          "concerns": "Limited abstract information makes full assessment difficult. The computational/machine learning focus without clear experimental detection validation or early-stage screening application reduces practical relevance for early detection implementation. Unclear if this represents a novel detection method or primarily a data analysis exercise.",
+          "confidence": "medium"
+        },
+        "model": "claude-sonnet-4-5-20250929",
+        "version": "v1",
+        "latency_ms": 7037,
+        "error": null,
+        "reviewed_at": "2026-01-21T17:56:36.255044"
+      },
+      "gemini_review": {
+        "success": true,
+        "review": {
+          "relevancy_score": 65,
+          "relevancy_reason": "This paper focuses on lung adenocarcinoma and uses NGS/genomics to identify a miRNA expression signature. While it doesn't explicitly mention early detection, the identification of a signature could potentially be used for early detection.",
+          "signals": {
+            "cancer_type": "lung",
+            "breath_based": false,
+            "sensor_based": false,
+            "animal_model": false,
+            "ngs_genomics": true,
+            "early_detection_focus": false
+          },
+          "summary": "The study identifies a novel miRNA expression signature for lung adenocarcinoma using machine learning and NGS data. This signature could potentially serve as a biomarker for lung cancer.",
+          "concerns": "The abstract doesn't explicitly state that the identified signature is intended or validated for early detection. The study is also a pre-print, so the findings have not been peer-reviewed.",
+          "confidence": "medium"
+        },
+        "model": "gemini-2.0-flash-exp",
+        "version": "v1",
+        "latency_ms": 3845,
+        "error": null,
+        "reviewed_at": "2026-01-21T17:56:40.100433"
+      },
+      "gpt_evaluation": {
+        "success": true,
+        "evaluation": {
+          "final_relevancy_score": 60,
+          "final_relevancy_reason": "Both reviews recognize the relevance of the study to lung adenocarcinoma and the use of NGS/genomics, but they diverge on the implications for early detection. While Gemini suggests potential for early detection, Claude emphasizes the lack of explicit focus on this aspect, leading to a cautious stance.",
+          "final_signals": {
+            "cancer_type": "lung",
+            "breath_based": false,
+            "sensor_based": false,
+            "animal_model": false,
+            "ngs_genomics": true,
+            "early_detection_focus": false
+          },
+          "final_summary": "The study identifies a miRNA expression signature for lung adenocarcinoma using machine learning and NGS data. However, it lacks a clear focus on early detection, which is critical for SpotItEarly's mission.",
+          "agreement_level": "moderate",
+          "disagreements": [
+            "Claude emphasizes the lack of experimental validation for early detection methods, while Gemini suggests potential use for early detection without explicit validation."
+          ],
+          "evaluator_rationale": "I weighted Claude's review slightly more due to its critical assessment of the lack of clear early detection focus and experimental validation, which aligns closely with SpotItEarly's mission.",
+          "confidence": "medium"
+        },
+        "model": "gpt-4o-mini",
+        "version": "v1",
+        "latency_ms": 14527,
+        "error": null,
+        "evaluated_at": "2026-01-21T17:56:54.629943",
+        "inputs_used": {
+          "claude_available": true,
+          "gemini_available": true
+        }
+      }
+    },
+    {
+      "publication_id": "ad6f498752eeb6efb937839a1a480f0dac8221513a84c8fb089c57d60752a360",
+      "title": "GenCore: Genomic distance estimation using Locally Consistent Parsing",
+      "source": "bioRxiv (all)",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.10.698768v1?rss=1",
+      "claude_review": {
+        "success": true,
+        "review": {
+          "relevancy_score": 0,
+          "relevancy_reason": "This publication focuses on a computational method for genomic distance estimation using parsing algorithms. It does not address cancer detection, early screening, or any cancer-related application.",
+          "signals": {
+            "cancer_type": "none",
+            "breath_based": false,
+            "sensor_based": false,
+            "animal_model": false,
+            "ngs_genomics": false,
+            "early_detection_focus": false
+          },
+          "summary": "GenCore presents a computational algorithm called Locally Consistent Parsing for estimating genomic distances between sequences. This is a purely bioinformatics methodology paper focused on sequence analysis techniques without specific application to cancer or disease detection.",
+          "concerns": "Purely computational method with no apparent connection to cancer detection or early screening applications. No abstract available for detailed review, but title and source indicate a methods-focused bioinformatics paper.",
+          "confidence": "high"
+        },
+        "model": "claude-sonnet-4-5-20250929",
+        "version": "v1",
+        "latency_ms": 5579,
+        "error": null,
+        "reviewed_at": "2026-01-21T17:57:00.209190"
+      },
+      "gemini_review": {
+        "success": true,
+        "review": {
+          "relevancy_score": 25,
+          "relevancy_reason": "This paper focuses on genomic distance estimation, which could have applications in cancer genomics. However, without a specific cancer type or detection method mentioned, the relevance is weak. The purely computational nature also reduces the score.",
+          "signals": {
+            "cancer_type": "other",
+            "breath_based": false,
+            "sensor_based": false,
+            "animal_model": false,
+            "ngs_genomics": true,
+            "early_detection_focus": false
+          },
+          "summary": "The paper introduces GenCore, a method for estimating genomic distances using Locally Consistent Parsing. It is a computational approach for analyzing genomic data.",
+          "concerns": "The abstract provides very little information about the specific application of this method to cancer or early detection. It appears to be a purely computational method.",
+          "confidence": "low"
+        },
+        "model": "gemini-2.0-flash-exp",
+        "version": "v1",
+        "latency_ms": 1696,
+        "error": null,
+        "reviewed_at": "2026-01-21T17:57:01.905435"
+      },
+      "gpt_evaluation": {
+        "success": true,
+        "evaluation": {
+          "final_relevancy_score": 12,
+          "final_relevancy_reason": "While both reviews indicate that the publication lacks a direct application to cancer detection, Gemini acknowledges a potential relevance to cancer genomics, albeit weak. Claude's assessment is more definitive in stating the irrelevance to cancer detection, leading to a lower score.",
+          "final_signals": {
+            "cancer_type": "none",
+            "breath_based": false,
+            "sensor_based": false,
+            "animal_model": false,
+            "ngs_genomics": true,
+            "early_detection_focus": false
+          },
+          "final_summary": "The publication presents a computational method for genomic distance estimation, which does not directly contribute to early cancer detection. Its relevance to cancer genomics is minimal and lacks specific applications.",
+          "agreement_level": "low",
+          "disagreements": [
+            "Claude rated the relevance as 0, while Gemini rated it 25.",
+            "Claude identified no cancer type, while Gemini noted 'other' without specifics."
+          ],
+          "evaluator_rationale": "I weighted Claude's review more heavily due to its clearer articulation of the publication's lack of relevance to cancer detection, despite Gemini's acknowledgment of potential applications in cancer genomics.",
+          "confidence": "high"
+        },
+        "model": "gpt-4o-mini",
+        "version": "v1",
+        "latency_ms": 6171,
+        "error": null,
+        "evaluated_at": "2026-01-21T17:57:08.077919",
+        "inputs_used": {
+          "claude_available": true,
+          "gemini_available": true
+        }
+      }
+    },
+    {
+      "publication_id": "c35d3375258ddb4df99a06a11e4f868bb0ee704c6c5b8d1c55815899044118df",
+      "title": "Towards automated gating of clinical flow cytometry data",
+      "source": "bioRxiv (all)",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.10.698765v1?rss=1",
+      "claude_review": {
+        "success": true,
+        "review": {
+          "relevancy_score": 15,
+          "relevancy_reason": "This publication focuses on automated gating methods for flow cytometry data analysis, which is a computational/analytical tool rather than a novel cancer detection method. While flow cytometry can be used in cancer diagnostics, this work appears to be purely methodological without specific focus on early cancer detection.",
+          "signals": {
+            "cancer_type": "none",
+            "breath_based": false,
+            "sensor_based": false,
+            "animal_model": false,
+            "ngs_genomics": false,
+            "early_detection_focus": false
+          },
+          "summary": "The publication describes computational methods for automating the gating process in clinical flow cytometry data analysis. Flow cytometry is a laboratory technique used to analyze cell populations, but this work focuses on improving the analytical workflow rather than developing new detection capabilities. Without access to the full abstract, the specific application domain and cancer relevance remain unclear.",
+          "concerns": "Purely computational focus on data analysis methodology rather than novel detection methods. No clear indication of early cancer detection application or specific cancer type focus. Limited information available from title alone.",
+          "confidence": "medium"
+        },
+        "model": "claude-sonnet-4-5-20250929",
+        "version": "v1",
+        "latency_ms": 6473,
+        "error": null,
+        "reviewed_at": "2026-01-21T17:57:14.551630"
+      },
+      "gemini_review": {
+        "success": true,
+        "review": {
+          "relevancy_score": 20,
+          "relevancy_reason": "This publication lacks an abstract, making it difficult to assess its relevance. Without knowing the cancer type or detection method, a low base score is assigned, assuming it might be related to 'other' cancers.",
+          "signals": {
+            "cancer_type": "other",
+            "breath_based": false,
+            "sensor_based": false,
+            "animal_model": false,
+            "ngs_genomics": false,
+            "early_detection_focus": false
+          },
+          "summary": "The title suggests a focus on automated gating of flow cytometry data, but without an abstract, the specific application and findings are unknown.",
+          "concerns": "The absence of an abstract makes it impossible to determine the relevance to early cancer detection. The topic of flow cytometry data analysis could be related to cancer, but it could also be applied to other fields.",
+          "confidence": "low"
+        },
+        "model": "gemini-2.0-flash-exp",
+        "version": "v1",
+        "latency_ms": 2012,
+        "error": null,
+        "reviewed_at": "2026-01-21T17:57:16.563976"
+      },
+      "gpt_evaluation": {
+        "success": true,
+        "evaluation": {
+          "final_relevancy_score": 15,
+          "final_relevancy_reason": "Both reviews indicate a lack of focus on early cancer detection, with Claude providing a more detailed analysis of the publication's methodological nature. The absence of an abstract limits the ability to evaluate the relevance fully, but the consensus is that the work does not contribute directly to early cancer detection efforts.",
+          "final_signals": {
+            "cancer_type": "none",
+            "breath_based": false,
+            "sensor_based": false,
+            "animal_model": false,
+            "ngs_genomics": false,
+            "early_detection_focus": false
+          },
+          "final_summary": "The publication primarily addresses automated methods for data analysis in flow cytometry, lacking a direct application to early cancer detection. Both reviewers agree on the limited relevance to SpotItEarly's mission.",
+          "agreement_level": "high",
+          "disagreements": "None",
+          "evaluator_rationale": "Claude's review provided a more thorough analysis of the publication's focus and implications, leading to a stronger justification for the final decision.",
+          "confidence": "medium"
+        },
+        "model": "gpt-4o-mini",
+        "version": "v1",
+        "latency_ms": 5721,
+        "error": null,
+        "evaluated_at": "2026-01-21T17:57:22.286138",
+        "inputs_used": {
+          "claude_available": true,
+          "gemini_available": true
+        }
+      }
+    }
+  ]
+}

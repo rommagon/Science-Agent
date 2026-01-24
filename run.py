@@ -22,7 +22,11 @@ from diff.detect_changes import detect_changes
 from enrich.commercial import enrich_publication_commercial
 from ingest.fetch import fetch_publications
 from output.report import export_new_to_csv, generate_report
-from storage.sqlite_store import store_publications, store_run_history
+from storage.store import get_store, get_database_url
+
+# Get storage implementation (Postgres or SQLite)
+store = get_store()
+database_url = get_database_url()
 from summarize.summarize import summarize_publications
 
 from config.expansion_config import (
@@ -497,7 +501,10 @@ def main() -> None:
 
     # Phase 1.6: Store publications to database (additive, non-blocking)
     logger.info("Phase 1.6: Storing publications to database")
-    db_result = store_publications(publications, run_id)
+    if database_url:
+        db_result = store.store_publications(publications, run_id, database_url)
+    else:
+        db_result = store.store_publications(publications, run_id)
     if db_result["success"]:
         logger.info(
             "Database storage: %d inserted, %d duplicates",
@@ -538,7 +545,10 @@ def main() -> None:
 
             # Store expanded publications (in case expansion discovered new IDs not present yet)
             logger.info("Phase 1.7.5: Storing expanded publications to database")
-            db_result2 = store_publications(publications, run_id)
+            if database_url:
+                db_result2 = store.store_publications(publications, run_id, database_url)
+            else:
+                db_result2 = store.store_publications(publications, run_id)
             if db_result2["success"]:
                 logger.info(
                     "DB after expansion: %d inserted, %d duplicates",
@@ -919,16 +929,21 @@ def main() -> None:
         # Export relevancy scoring events (if relevancy scoring is enabled)
         if ENABLE_RELEVANCE_SCORING and run_id:
             try:
-                from storage.sqlite_store import export_relevancy_events_to_jsonl
-
                 relevancy_events_filename = "relevancy_events.jsonl" if run_type else "latest_relevancy_events.jsonl"
                 relevancy_events_path = output_subdir / relevancy_events_filename
 
-                export_result = export_relevancy_events_to_jsonl(
-                    run_id=run_id,
-                    output_path=str(relevancy_events_path),
-                    db_path=_default_db_path(outdir),
-                )
+                if database_url:
+                    export_result = store.export_relevancy_events_to_jsonl(
+                        run_id=run_id,
+                        output_path=str(relevancy_events_path),
+                        database_url=database_url,
+                    )
+                else:
+                    export_result = store.export_relevancy_events_to_jsonl(
+                        run_id=run_id,
+                        output_path=str(relevancy_events_path),
+                        db_path=_default_db_path(outdir),
+                    )
 
                 if export_result["success"]:
                     logger.info(
@@ -1153,20 +1168,37 @@ def main() -> None:
         ]
     )
 
-    run_history_result = store_run_history(
-        run_id=run_id,
-        started_at=run_start_time.isoformat(),
-        since_timestamp=since_date.isoformat(),
-        max_items_per_source=args.max_items_per_source if args.max_items_per_source else 0,
-        sources_count=len(sources),
-        total_fetched=dedupe_stats["total_input"],
-        total_deduped=dedupe_stats["total_output"],
-        new_count=changes["count_new"],
-        unchanged_count=changes["count_total"] - changes["count_new"],
-        summarized_count=summarized_count,
-        upload_drive=args.upload_drive,
-        publications_with_status=changes["all_with_status"],
-    )
+    if database_url:
+        run_history_result = store.store_run_history(
+            run_id=run_id,
+            started_at=run_start_time.isoformat(),
+            since_timestamp=since_date.isoformat(),
+            max_items_per_source=args.max_items_per_source if args.max_items_per_source else 0,
+            sources_count=len(sources),
+            total_fetched=dedupe_stats["total_input"],
+            total_deduped=dedupe_stats["total_output"],
+            new_count=changes["count_new"],
+            unchanged_count=changes["count_total"] - changes["count_new"],
+            summarized_count=summarized_count,
+            upload_drive=args.upload_drive,
+            publications_with_status=changes["all_with_status"],
+            database_url=database_url,
+        )
+    else:
+        run_history_result = store.store_run_history(
+            run_id=run_id,
+            started_at=run_start_time.isoformat(),
+            since_timestamp=since_date.isoformat(),
+            max_items_per_source=args.max_items_per_source if args.max_items_per_source else 0,
+            sources_count=len(sources),
+            total_fetched=dedupe_stats["total_input"],
+            total_deduped=dedupe_stats["total_output"],
+            new_count=changes["count_new"],
+            unchanged_count=changes["count_total"] - changes["count_new"],
+            summarized_count=summarized_count,
+            upload_drive=args.upload_drive,
+            publications_with_status=changes["all_with_status"],
+        )
 
     if run_history_result["success"]:
         logger.info("Run history stored: %d publications tracked", run_history_result["pub_runs_inserted"])

@@ -1,10 +1,45 @@
 {
   "run_id": "weekly-2026-03",
-  "timestamp": "2026-01-12T22:27:05.613920",
-  "since_date": "2026-01-06",
-  "config": {
-    "path": "config/sources.yaml",
-    "sha256": "a8791fa61e443a44769e8622d90c7716b0b049e5e60e1be87a549d11b13d5156"
+  "run_type": "weekly",
+  "generated_at": "2026-01-12T22:29:30.665124",
+  "window_start": "2026-01-06T02:02:33.121674+00:00",
+  "window_end": "2026-01-13T02:02:33.121674+00:00",
+  "counts": {
+    "total_candidates": 773,
+    "fetched": 778,
+    "deduplicated": 731,
+    "new_count": 107,
+    "unchanged_count": 666
+  },
+  "local_output_paths": {
+    "must_reads_json": "data/outputs/weekly/weekly-2026-03/must_reads.json",
+    "report_md": "data/outputs/weekly/weekly-2026-03/report.md",
+    "new_csv": "data/outputs/weekly/weekly-2026-03/new.csv",
+    "manifest_json": "data/manifests/weekly/weekly-2026-03.json",
+    "summaries_json": "data/outputs/weekly/weekly-2026-03/summaries.json"
+  },
+  "output_paths": {
+    "must_reads_json": "data/outputs/weekly/weekly-2026-03/must_reads.json",
+    "report_md": "data/outputs/weekly/weekly-2026-03/report.md",
+    "new_csv": "data/outputs/weekly/weekly-2026-03/new.csv",
+    "manifest_json": "data/manifests/weekly/weekly-2026-03.json",
+    "summaries_json": "data/outputs/weekly/weekly-2026-03/summaries.json"
+  },
+  "drive_output_paths": {
+    "must_reads": "Weekly/weekly-2026-03/must_reads.json",
+    "report": "Weekly/weekly-2026-03/report.md",
+    "new": "Weekly/weekly-2026-03/new.csv",
+    "summaries": "Weekly/weekly-2026-03/summaries.json"
+  },
+  "drive_file_ids": {
+    "must_reads": "1X9Bqs28TSvl8GebMeHwHJOGU-KMqlO4k",
+    "report": "1vJZ5NC77WamGPY_HKTBCWctjAk7_p-ml",
+    "new": "1-HkvW0t7MKV0q41jGdwGPHjnft7YxTc7",
+    "summaries": "1wMlgpJvLRMpI5d057I-zHV6_Qt5RgMDu"
+  },
+  "scoring": {
+    "relevancy_version": "poc_v2",
+    "credibility_version": "poc_v3"
   },
   "active_sources": [
     "Nature Cancer",
@@ -222,20 +257,9 @@
       "missing_date_count": 0
     }
   ],
-  "counts": {
-    "total_fetched": 773,
-    "total_new": 107,
-    "total_unchanged": 666
-  },
-  "outputs": {
-    "publications_json": "data/raw/weekly-2026-03_publications.json",
-    "changes_json": "data/raw/weekly-2026-03_changes.json",
-    "report_md": "data/output/weekly-2026-03_report.md",
-    "new_csv": "data/output/weekly-2026-03_new.csv",
-    "manifest_json": "data/output/weekly-2026-03_manifest.json",
-    "latest_report_md": "data/output/latest_report.md",
-    "latest_new_csv": "data/output/latest_new.csv",
-    "latest_manifest_json": "data/output/latest_manifest.json"
+  "config": {
+    "path": "config/sources.yaml",
+    "sha256": "a8791fa61e443a44769e8622d90c7716b0b049e5e60e1be87a549d11b13d5156"
   },
   "deduplication": {
     "total_fetched_raw": 778,
