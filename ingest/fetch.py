@@ -14,8 +14,8 @@ from acitrack_types import Publication, compute_id
 
 logger = logging.getLogger(__name__)
 
-# User agent for RSS fetching
-USER_AGENT = "acitrack-v1/0.1 (+https://github.com/spotitearly/acitrack)"
+# User agent for RSS fetching (including medRxiv compatibility)
+USER_AGENT = "Mozilla/5.0 (compatible; acitracker/1.0; +https://spotitearly.ai)"
 REQUEST_TIMEOUT = 15  # seconds
 MAX_REDIRECTS = 5
 
@@ -140,6 +140,12 @@ def _fetch_rss_source(
         if final_url != url:
             logger.info("Source '%s': redirected to %s", source_name, final_url)
         logger.info("Source '%s': HTTP %d", source_name, response.status_code)
+
+        # Handle 403 as non-fatal for medRxiv (log and continue with empty results)
+        if response.status_code == 403:
+            logger.warning("Source '%s': HTTP 403 Forbidden - server rejected request (User-Agent: %s). Skipping source.",
+                         source_name, USER_AGENT)
+            return [], 0
 
         response.raise_for_status()
 
@@ -490,15 +496,54 @@ def _fetch_pubmed_source(
 
         logger.info("Source '%s': searching PubMed from %s to %s", source_name, mindate, maxdate)
 
-        response = requests.get(
-            PUBMED_ESEARCH_URL,
-            params=esearch_params,
-            headers={"User-Agent": USER_AGENT},
-            timeout=REQUEST_TIMEOUT
-        )
-        response.raise_for_status()
+        # ESearch with retry and exponential backoff for 429 errors
+        max_retries = 5
+        base_delay = 1.0
+        search_result = None
 
-        search_result = response.json()
+        for attempt in range(max_retries):
+            try:
+                # Add small throttle between PubMed calls (politeness)
+                if attempt > 0:
+                    jitter = 0.1 * (hash(source_name) % 10) / 10  # 0-0.1s jitter
+                    delay = base_delay * (2 ** (attempt - 1)) + jitter  # Exponential backoff with jitter
+                    logger.info("Source '%s': PubMed retry attempt %d after %.2fs", source_name, attempt + 1, delay)
+                    time.sleep(delay)
+
+                response = requests.get(
+                    PUBMED_ESEARCH_URL,
+                    params=esearch_params,
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=REQUEST_TIMEOUT
+                )
+
+                if response.status_code == 429:
+                    # Rate limit - retry with backoff
+                    logger.warning("Source '%s': PubMed rate limit (429) on attempt %d", source_name, attempt + 1)
+                    if attempt < max_retries - 1:
+                        continue
+                    else:
+                        logger.error("Source '%s': PubMed rate limit persists after %d attempts", source_name, max_retries)
+                        return [], 0
+
+                response.raise_for_status()
+                search_result = response.json()
+                break  # Success
+
+            except requests.exceptions.Timeout:
+                logger.warning("Source '%s': PubMed ESearch timeout on attempt %d", source_name, attempt + 1)
+                if attempt == max_retries - 1:
+                    logger.error("Source '%s': PubMed ESearch timed out after %d attempts", source_name, max_retries)
+                    return [], 0
+            except requests.exceptions.RequestException as e:
+                logger.warning("Source '%s': PubMed ESearch request error on attempt %d: %s", source_name, attempt + 1, e)
+                if attempt == max_retries - 1:
+                    logger.error("Source '%s': PubMed ESearch failed after %d attempts", source_name, max_retries)
+                    return [], 0
+
+        if search_result is None:
+            logger.error("Source '%s': Failed to get PubMed search results", source_name)
+            return [], 0
         pmids = search_result.get("esearchresult", {}).get("idlist", [])
 
         if not pmids:
@@ -507,25 +552,58 @@ def _fetch_pubmed_source(
 
         logger.info("Source '%s': found %d PMIDs", source_name, len(pmids))
 
-        # Be polite to NCBI
+        # Be polite to NCBI - add throttle before ESummary
         time.sleep(PUBMED_POLITENESS_DELAY)
 
-        # Step 2: ESummary to get publication details
+        # Step 2: ESummary to get publication details (with retry for 429)
         esummary_params = {
             "db": "pubmed",
             "id": ",".join(pmids),
             "retmode": "json"
         }
 
-        response = requests.get(
-            PUBMED_ESUMMARY_URL,
-            params=esummary_params,
-            headers={"User-Agent": USER_AGENT},
-            timeout=REQUEST_TIMEOUT
-        )
-        response.raise_for_status()
+        summary_result = None
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    jitter = 0.1 * (hash(source_name) % 10) / 10
+                    delay = base_delay * (2 ** (attempt - 1)) + jitter
+                    logger.info("Source '%s': PubMed ESummary retry attempt %d after %.2fs", source_name, attempt + 1, delay)
+                    time.sleep(delay)
 
-        summary_result = response.json()
+                response = requests.get(
+                    PUBMED_ESUMMARY_URL,
+                    params=esummary_params,
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=REQUEST_TIMEOUT
+                )
+
+                if response.status_code == 429:
+                    logger.warning("Source '%s': PubMed ESummary rate limit (429) on attempt %d", source_name, attempt + 1)
+                    if attempt < max_retries - 1:
+                        continue
+                    else:
+                        logger.error("Source '%s': PubMed ESummary rate limit persists after %d attempts", source_name, max_retries)
+                        return [], 0
+
+                response.raise_for_status()
+                summary_result = response.json()
+                break  # Success
+
+            except requests.exceptions.Timeout:
+                logger.warning("Source '%s': PubMed ESummary timeout on attempt %d", source_name, attempt + 1)
+                if attempt == max_retries - 1:
+                    logger.error("Source '%s': PubMed ESummary timed out after %d attempts", source_name, max_retries)
+                    return [], 0
+            except requests.exceptions.RequestException as e:
+                logger.warning("Source '%s': PubMed ESummary request error on attempt %d: %s", source_name, attempt + 1, e)
+                if attempt == max_retries - 1:
+                    logger.error("Source '%s': PubMed ESummary failed after %d attempts", source_name, max_retries)
+                    return [], 0
+
+        if summary_result is None:
+            logger.error("Source '%s': Failed to get PubMed summary results", source_name)
+            return [], 0
         results = summary_result.get("result", {})
 
         publications = []

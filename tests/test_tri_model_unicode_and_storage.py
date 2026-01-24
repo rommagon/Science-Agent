@@ -151,6 +151,83 @@ def test_json_dumps_unicode():
     print("✓ test_json_dumps_unicode passed")
 
 
+def test_claude_review_unicode_robustness():
+    """Test that Claude review handles unicode without crashing."""
+    from tri_model.reviewers import claude_review
+    from tri_model.text_sanitize import sanitize_for_llm
+
+    # Paper with problematic unicode characters
+    paper = {
+        "id": "test123",
+        "title": "Cancer Detection\u2028Using Novel\u2029Biomarkers",
+        "source": "Test\u2028Journal",
+        "raw_text": "Abstract with\u2028line separator and\u2029paragraph separator and other text.",
+    }
+
+    # Should not crash (even without API keys, should fail gracefully)
+    # The sanitization should happen before any API calls
+    result = claude_review(paper)
+
+    # Verify result structure (will have success=False without API key, but shouldn't crash)
+    assert isinstance(result, dict)
+    assert "success" in result
+    assert "model" in result
+
+    # Verify sanitization was applied
+    sanitized_title = sanitize_for_llm(paper["title"])
+    assert "\u2028" not in sanitized_title
+    assert "\u2029" not in sanitized_title
+
+    print("✓ test_claude_review_unicode_robustness passed")
+
+
+def test_evaluator_unicode_robustness():
+    """Test that GPT evaluator handles unicode without crashing."""
+    from tri_model.evaluator import gpt_evaluate
+
+    # Paper with unicode
+    paper = {
+        "id": "test456",
+        "title": "Test\u2028Paper",
+        "source": "Test\u2029Source",
+        "raw_text": "Abstract\u2028text",
+    }
+
+    # Mock reviews with unicode
+    claude_result = {
+        "success": True,
+        "review": {
+            "relevancy_score": 75,
+            "relevancy_reason": "Good\u2028paper",
+            "signals": {},
+            "summary": "Summary\u2029text",
+            "concerns": "None",
+            "confidence": "high",
+        }
+    }
+
+    gemini_result = {
+        "success": True,
+        "review": {
+            "relevancy_score": 80,
+            "relevancy_reason": "Also\u2028good",
+            "signals": {},
+            "summary": "Another\u2029summary",
+            "concerns": "None",
+            "confidence": "high",
+        }
+    }
+
+    # Should not crash (will fail without API key, but gracefully)
+    result = gpt_evaluate(paper, claude_result, gemini_result)
+
+    # Verify result structure
+    assert isinstance(result, dict)
+    assert "success" in result
+
+    print("✓ test_evaluator_unicode_robustness passed")
+
+
 if __name__ == "__main__":
     # Run tests
     test_sanitize_for_llm()
@@ -158,4 +235,6 @@ if __name__ == "__main__":
     test_disagreements_normalization()
     test_agreement_level_normalization()
     test_json_dumps_unicode()
+    test_claude_review_unicode_robustness()
+    test_evaluator_unicode_robustness()
     print("\n✅ All tests passed!")

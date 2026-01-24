@@ -13,6 +13,7 @@ from datetime import datetime
 
 from config.tri_model_config import GPT_EVALUATOR_VERSION, REVIEW_TIMEOUT_SECONDS, MAX_REVIEW_RETRIES
 from tri_model.prompts import get_gpt_evaluator_prompt
+from tri_model.text_sanitize import sanitize_for_llm, sanitize_paper_for_review
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,9 @@ def gpt_evaluate(
             }
         }
 
+    # Sanitize paper at entry point to remove unicode control characters
+    paper = sanitize_paper_for_review(paper)
+
     title = paper.get("title", "")
     source = paper.get("source", "")
     abstract = paper.get("raw_text") or paper.get("summary") or ""
@@ -167,6 +171,9 @@ def gpt_evaluate(
         }
 
     prompt = get_gpt_evaluator_prompt(title, source, abstract, claude_review, gemini_review)
+
+    # Final sanitization of prompt string before API call (last mile defense)
+    prompt = sanitize_for_llm(prompt)
 
     # Call GPT API with retry logic
     start_time = time.time()
