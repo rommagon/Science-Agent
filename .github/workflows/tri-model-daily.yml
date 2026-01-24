@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       max_papers:
-        description: 'Maximum papers to review'
+        description: 'Maximum papers to review (leave empty for uncapped)'
         required: false
-        default: '50'
+        default: ''
         type: string
       lookback_hours:
         description: 'Lookback window in hours'
@@ -58,7 +58,12 @@ jobs:
         run: |
           # Construct command with dynamic flags
           CMD="python3 -u run_tri_model_daily.py"
-          CMD="$CMD --max-papers ${{ inputs.max_papers || '50' }}"
+
+          # Only add --max-papers if explicitly provided (uncapped by default)
+          if [ -n "${{ inputs.max_papers }}" ]; then
+            CMD="$CMD --max-papers ${{ inputs.max_papers }}"
+          fi
+
           CMD="$CMD --lookback-hours ${{ inputs.lookback_hours || '48' }}"
 
           # Add backend ingestion flag if enabled (default true for scheduled runs)

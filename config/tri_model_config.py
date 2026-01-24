@@ -8,7 +8,7 @@ This module provides configuration for the experimental tri-model review system:
 Environment Variables:
 - TRI_MODEL_MINI_DAILY: Enable tri-model mini-daily run (default: false)
 - CLAUDE_API_KEY: Anthropic Claude API key
-- CLAUDE_MODEL: Claude model name (default: claude-sonnet-4-5-20250929)
+- CLAUDE_MODEL: Claude model name (default: claude-3-5-haiku-20241022)
 - GEMINI_API_KEY: Google Gemini API key
 - GEMINI_MODEL: Gemini model name (default: gemini-2.0-flash-exp)
 - MINI_DAILY_WINDOW_HOURS: Lookback window in hours (default: 6)
@@ -82,7 +82,7 @@ CLAUDE_API_KEY = sanitize_secret(os.getenv("CLAUDE_API_KEY"))
 GEMINI_API_KEY = sanitize_secret(os.getenv("GEMINI_API_KEY"))
 
 # Model names
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-3-5-haiku-20241022")  # Haiku 3.5 for cost savings
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
 
 # Mini-daily parameters

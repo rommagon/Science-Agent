@@ -46,6 +46,7 @@ from config.tri_model_config import (
 )
 from tri_model.reviewers import claude_review, gemini_review
 from tri_model.evaluator import gpt_evaluate
+from tri_model.credibility import score_paper_credibility
 from tri_model.prompts import CLAUDE_REVIEW_PROMPT_V1, GEMINI_REVIEW_PROMPT_V1, GPT_EVALUATOR_PROMPT_V1
 
 # Configure logging
@@ -163,6 +164,27 @@ def review_paper_with_tri_model(
         logger.error("GPT evaluator exception for %s: %s", paper.get("id", "unknown")[:16], e)
         return None
 
+    # Score credibility (using same LLM-based system as classic pipeline)
+    credibility_result = None
+    try:
+        credibility_result = score_paper_credibility(paper)
+        if credibility_result.get("error"):
+            logger.warning(
+                "Credibility scoring had issues for %s: %s",
+                paper.get("id", "unknown")[:16],
+                credibility_result.get("error"),
+            )
+    except Exception as e:
+        logger.error("Credibility scoring exception for %s: %s", paper.get("id", "unknown")[:16], e)
+        # Continue even if credibility fails - it's optional enrichment
+        credibility_result = {
+            "credibility_score": None,
+            "credibility_reason": f"Exception: {str(e)}",
+            "credibility_confidence": "low",
+            "credibility_signals": {},
+            "error": str(e)
+        }
+
     # Assemble full result
     return {
         "publication_id": paper.get("id"),
@@ -172,6 +194,7 @@ def review_paper_with_tri_model(
         "claude_review": claude_result,
         "gemini_review": gemini_result,
         "gpt_evaluation": gpt_result,
+        "credibility": credibility_result,
     }
 
 
@@ -220,6 +243,11 @@ def write_must_reads(
                 "confidence": paper["gpt_evaluation"]["evaluation"]["confidence"],
                 "claude_score": paper["claude_review"]["review"]["relevancy_score"] if paper["claude_review"] and paper["claude_review"].get("success") else None,
                 "gemini_score": paper["gemini_review"]["review"]["relevancy_score"] if paper["gemini_review"] and paper["gemini_review"].get("success") else None,
+                # Credibility fields (from classic pipeline credibility system)
+                "credibility_score": paper.get("credibility", {}).get("credibility_score"),
+                "credibility_reason": paper.get("credibility", {}).get("credibility_reason", ""),
+                "credibility_confidence": paper.get("credibility", {}).get("credibility_confidence", "low"),
+                "credibility_signals": paper.get("credibility", {}).get("credibility_signals", {}),
             }
             for paper in must_reads
         ],
@@ -733,6 +761,9 @@ def main() -> None:
             "gpt": result["gpt_evaluation"].get("model"),
         }
 
+        # Extract credibility data
+        cred_data = result.get("credibility", {})
+
         if database_url:
             store.store_tri_model_scoring_event(
                 run_id=run_id,
@@ -757,6 +788,10 @@ def main() -> None:
                 claude_latency_ms=claude_latency,
                 gemini_latency_ms=gemini_latency,
                 gpt_latency_ms=gpt_latency,
+                credibility_score=cred_data.get("credibility_score"),
+                credibility_reason=cred_data.get("credibility_reason"),
+                credibility_confidence=cred_data.get("credibility_confidence"),
+                credibility_signals=cred_data.get("credibility_signals"),
                 database_url=database_url,
             )
         else:
@@ -783,6 +818,10 @@ def main() -> None:
                 claude_latency_ms=claude_latency,
                 gemini_latency_ms=gemini_latency,
                 gpt_latency_ms=gpt_latency,
+                credibility_score=cred_data.get("credibility_score"),
+                credibility_reason=cred_data.get("credibility_reason"),
+                credibility_confidence=cred_data.get("credibility_confidence"),
+                credibility_signals=cred_data.get("credibility_signals"),
                 db_path=db_path,
             )
 

@@ -368,10 +368,37 @@ def _migrate_to_v7(cursor: sqlite3.Cursor) -> None:
             claude_latency_ms INTEGER,
             gemini_latency_ms INTEGER,
             gpt_latency_ms INTEGER,
+            credibility_score INTEGER,
+            credibility_reason TEXT,
+            credibility_confidence TEXT,
+            credibility_signals_json TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(run_id, publication_id)
         )
     """)
+
+    # Migrate existing databases - add credibility columns if they don't exist
+    try:
+        cursor.execute("PRAGMA table_info(tri_model_scoring_events)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "credibility_score" not in columns:
+            cursor.execute("ALTER TABLE tri_model_scoring_events ADD COLUMN credibility_score INTEGER")
+            logger.info("Added credibility_score column to tri_model_scoring_events")
+
+        if "credibility_reason" not in columns:
+            cursor.execute("ALTER TABLE tri_model_scoring_events ADD COLUMN credibility_reason TEXT")
+            logger.info("Added credibility_reason column to tri_model_scoring_events")
+
+        if "credibility_confidence" not in columns:
+            cursor.execute("ALTER TABLE tri_model_scoring_events ADD COLUMN credibility_confidence TEXT")
+            logger.info("Added credibility_confidence column to tri_model_scoring_events")
+
+        if "credibility_signals_json" not in columns:
+            cursor.execute("ALTER TABLE tri_model_scoring_events ADD COLUMN credibility_signals_json TEXT")
+            logger.info("Added credibility_signals_json column to tri_model_scoring_events")
+    except Exception as e:
+        logger.warning("Error during tri_model_scoring_events migration: %s", e)
 
     # Indexes for common queries
     cursor.execute("""
@@ -914,7 +941,12 @@ def store_tri_model_scoring_event(
     claude_latency_ms: Optional[int],
     gemini_latency_ms: Optional[int],
     gpt_latency_ms: Optional[int],
+    credibility_score: Optional[int] = None,
+    credibility_reason: Optional[str] = None,
+    credibility_confidence: Optional[str] = None,
+    credibility_signals: Optional[Dict] = None,
     db_path: str = DEFAULT_DB_PATH,
+    database_url: Optional[str] = None,  # For backwards compatibility
 ) -> dict:
     """Store a tri-model scoring event.
 
@@ -941,7 +973,12 @@ def store_tri_model_scoring_event(
         claude_latency_ms: Claude latency
         gemini_latency_ms: Gemini latency
         gpt_latency_ms: GPT latency
+        credibility_score: Credibility score (0-100) or None
+        credibility_reason: Credibility reason text or None
+        credibility_confidence: Credibility confidence (low/medium/high) or None
+        credibility_signals: Credibility signals dict or None
         db_path: Path to database file
+        database_url: Database URL (for backwards compatibility, ignored)
 
     Returns:
         Dictionary with storage result
@@ -971,8 +1008,9 @@ def store_tri_model_scoring_event(
                 final_relevancy_score, final_relevancy_reason, final_signals_json,
                 final_summary, agreement_level, disagreements, evaluator_rationale,
                 confidence, prompt_versions_json, model_names_json,
-                claude_latency_ms, gemini_latency_ms, gpt_latency_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                claude_latency_ms, gemini_latency_ms, gpt_latency_ms,
+                credibility_score, credibility_reason, credibility_confidence, credibility_signals_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             run_id,
             mode,
@@ -996,6 +1034,10 @@ def store_tri_model_scoring_event(
             claude_latency_ms,
             gemini_latency_ms,
             gpt_latency_ms,
+            credibility_score,
+            credibility_reason,
+            credibility_confidence,
+            json.dumps(credibility_signals, ensure_ascii=False) if credibility_signals else None,
         ))
 
         conn.commit()
@@ -1050,6 +1092,7 @@ def export_tri_model_events_to_jsonl(
                 final_summary, agreement_level, disagreements, evaluator_rationale,
                 confidence, prompt_versions_json, model_names_json,
                 claude_latency_ms, gemini_latency_ms, gpt_latency_ms,
+                credibility_score, credibility_reason, credibility_confidence, credibility_signals_json,
                 created_at
             FROM tri_model_scoring_events
             WHERE run_id = ?
@@ -1086,7 +1129,11 @@ def export_tri_model_events_to_jsonl(
                     "claude_latency_ms": row[19],
                     "gemini_latency_ms": row[20],
                     "gpt_latency_ms": row[21],
-                    "created_at": row[22],
+                    "credibility_score": row[22],
+                    "credibility_reason": row[23],
+                    "credibility_confidence": row[24],
+                    "credibility_signals": json.loads(row[25]) if row[25] else {},
+                    "created_at": row[26],
                 }
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
                 events_exported += 1
