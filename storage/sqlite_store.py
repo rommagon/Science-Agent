@@ -933,7 +933,7 @@ def store_tri_model_scoring_event(
         final_signals: Final signals dict
         final_summary: Final summary
         agreement_level: Agreement level (high/moderate/low)
-        disagreements: Disagreements text
+        disagreements: Disagreements text or list/dict (will be JSON-encoded)
         evaluator_rationale: Evaluator rationale
         confidence: Confidence level
         prompt_versions: Prompt versions dict
@@ -952,6 +952,18 @@ def store_tri_model_scoring_event(
         conn = _get_connection(db_path)
         cursor = conn.cursor()
 
+        # Normalize disagreements to string
+        # Handle case where it might be a list or dict from evaluator
+        if isinstance(disagreements, (list, dict)):
+            disagreements_str = json.dumps(disagreements, ensure_ascii=False)
+        elif disagreements is None:
+            disagreements_str = None
+        else:
+            disagreements_str = str(disagreements)
+
+        # Ensure agreement_level is a string
+        agreement_level_str = str(agreement_level) if agreement_level is not None else "unknown"
+
         cursor.execute("""
             INSERT OR REPLACE INTO tri_model_scoring_events (
                 run_id, mode, publication_id, title, source, published_date,
@@ -968,19 +980,19 @@ def store_tri_model_scoring_event(
             title,
             source,
             published_date,
-            json.dumps(claude_review) if claude_review else None,
-            json.dumps(gemini_review) if gemini_review else None,
-            json.dumps(gpt_eval) if gpt_eval else None,
+            json.dumps(claude_review, ensure_ascii=False) if claude_review else None,
+            json.dumps(gemini_review, ensure_ascii=False) if gemini_review else None,
+            json.dumps(gpt_eval, ensure_ascii=False) if gpt_eval else None,
             final_relevancy_score,
             final_relevancy_reason,
-            json.dumps(final_signals),
+            json.dumps(final_signals, ensure_ascii=False),
             final_summary,
-            agreement_level,
-            disagreements,
+            agreement_level_str,
+            disagreements_str,
             evaluator_rationale,
             confidence,
-            json.dumps(prompt_versions),
-            json.dumps(model_names),
+            json.dumps(prompt_versions, ensure_ascii=False),
+            json.dumps(model_names, ensure_ascii=False),
             claude_latency_ms,
             gemini_latency_ms,
             gpt_latency_ms,

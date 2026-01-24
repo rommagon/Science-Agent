@@ -50,6 +50,10 @@ jobs:
           SPOTITEARLY_LLM_API_KEY: ${{ secrets.SPOTITEARLY_LLM_API_KEY }}
           BACKEND_URL: ${{ secrets.BACKEND_URL }}
           BACKEND_API_KEY: ${{ secrets.BACKEND_API_KEY }}
+          # Force UTF-8 encoding to handle unicode characters
+          PYTHONUTF8: '1'
+          LC_ALL: 'C.UTF-8'
+          LANG: 'C.UTF-8'
         run: |
           # Construct command with dynamic flags
           CMD="python3 -u run_tri_model_daily.py"
