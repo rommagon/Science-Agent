@@ -156,12 +156,13 @@ def test_claude_review_unicode_robustness():
     from tri_model.reviewers import claude_review
     from tri_model.text_sanitize import sanitize_for_llm
 
-    # Paper with problematic unicode characters
+    # Paper with problematic unicode characters in all text fields
     paper = {
         "id": "test123",
         "title": "Cancer Detection\u2028Using Novel\u2029Biomarkers",
         "source": "Test\u2028Journal",
-        "raw_text": "Abstract with\u2028line separator and\u2029paragraph separator and other text.",
+        "raw_text": "Abstract with\u2028line separator and\u2029paragraph separator and other text. "
+                    "This abstract contains multiple instances\u2028of unicode\u2029separators\u2028scattered throughout.",
     }
 
     # Should not crash (even without API keys, should fail gracefully)
@@ -172,6 +173,15 @@ def test_claude_review_unicode_robustness():
     assert isinstance(result, dict)
     assert "success" in result
     assert "model" in result
+    assert "error" in result  # Should have error field
+
+    # If it failed due to missing API key, that's expected
+    # The key is that it didn't crash with encoding error
+    if not result["success"]:
+        # Error should be about API key, not encoding
+        error_msg = result.get("error", "").lower()
+        assert "api" in error_msg or "key" in error_msg or "configured" in error_msg, \
+            f"Expected API key error, got: {result['error']}"
 
     # Verify sanitization was applied
     sanitized_title = sanitize_for_llm(paper["title"])
@@ -179,6 +189,41 @@ def test_claude_review_unicode_robustness():
     assert "\u2029" not in sanitized_title
 
     print("✓ test_claude_review_unicode_robustness passed")
+
+
+def test_claude_review_extreme_unicode():
+    """Test Claude review with extreme unicode edge cases."""
+    from tri_model.reviewers import claude_review
+
+    # Paper with multiple unicode issues
+    paper = {
+        "id": "test_extreme",
+        "title": "Study\u2028on\u2029Cancer\u2028Biomarkers",
+        "source": "Journal\u2028of\u2029Medicine",
+        "raw_text": (
+            "This is a comprehensive study\u2028examining novel biomarkers\u2029for early detection. "
+            "Methods\u2028included analysis\u2029of patient samples. "
+            "Results\u2028showed significant\u2029correlations. "
+            "Conclusions\u2028suggest clinical\u2029applications."
+        ),
+        "summary": "Study\u2028about\u2029biomarkers",
+    }
+
+    # Should handle gracefully without crashing
+    result = claude_review(paper)
+
+    # Verify it returns proper error structure, not a crash
+    assert isinstance(result, dict)
+    assert "success" in result
+    assert "error" in result
+
+    # Should fail due to API key, not encoding
+    assert result["success"] is False
+    error_msg = result.get("error", "").lower()
+    assert "codec" not in error_msg, "Should not have encoding error"
+    assert "encode" not in error_msg, "Should not have encoding error"
+
+    print("✓ test_claude_review_extreme_unicode passed")
 
 
 def test_evaluator_unicode_robustness():
@@ -236,5 +281,6 @@ if __name__ == "__main__":
     test_agreement_level_normalization()
     test_json_dumps_unicode()
     test_claude_review_unicode_robustness()
+    test_claude_review_extreme_unicode()
     test_evaluator_unicode_robustness()
     print("\n✅ All tests passed!")

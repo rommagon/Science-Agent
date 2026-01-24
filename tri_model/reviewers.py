@@ -133,6 +133,13 @@ def claude_review(paper: Dict) -> Dict:
     # Final sanitization of prompt string before API call (last mile defense)
     prompt = sanitize_for_llm(prompt)
 
+    # Extra hardening: UTF-8 encode/decode to prevent implicit ascii encoding
+    # This ensures that even if sanitization missed something, we won't crash
+    try:
+        prompt = prompt.encode("utf-8", "replace").decode("utf-8")
+    except Exception as encode_err:
+        logger.warning("UTF-8 encoding hardening failed: %s", encode_err)
+
     # Call Claude API with retry logic
     start_time = time.time()
     parsed_review = None
@@ -145,6 +152,11 @@ def claude_review(paper: Dict) -> Dict:
 
             logger.info("Calling Claude API (attempt %d/%d) for: %s", attempt + 1, MAX_REVIEW_RETRIES, title[:80])
 
+            # Final message assembly with per-message sanitization
+            # Apply sanitization to the actual message content that will be sent
+            sanitized_prompt = sanitize_for_llm(prompt)
+            sanitized_prompt = sanitized_prompt.encode("utf-8", "replace").decode("utf-8")
+
             response = client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=1024,
@@ -152,7 +164,7 @@ def claude_review(paper: Dict) -> Dict:
                 messages=[
                     {
                         "role": "user",
-                        "content": prompt
+                        "content": sanitized_prompt
                     }
                 ],
                 timeout=REVIEW_TIMEOUT_SECONDS,
@@ -170,6 +182,15 @@ def claude_review(paper: Dict) -> Dict:
                               attempt + 1, response_text[:200])
 
         except Exception as e:
+            # Diagnostic: check for unicode issues in the prompt
+            try:
+                u2028_count = sanitized_prompt.count('\u2028') if 'sanitized_prompt' in locals() else prompt.count('\u2028')
+                u2029_count = sanitized_prompt.count('\u2029') if 'sanitized_prompt' in locals() else prompt.count('\u2029')
+                if u2028_count > 0 or u2029_count > 0:
+                    logger.error("Unicode separators detected in prompt: U+2028=%d, U+2029=%d", u2028_count, u2029_count)
+            except:
+                pass  # Don't let diagnostic fail the error handling
+
             logger.warning("Claude API call failed on attempt %d: %s", attempt + 1, str(e))
             if attempt == MAX_REVIEW_RETRIES - 1:
                 # Last attempt failed
@@ -251,6 +272,13 @@ def gemini_review(paper: Dict) -> Dict:
     # Final sanitization of prompt string before API call (last mile defense)
     prompt = sanitize_for_llm(prompt)
 
+    # Extra hardening: UTF-8 encode/decode to prevent implicit ascii encoding
+    # This ensures that even if sanitization missed something, we won't crash
+    try:
+        prompt = prompt.encode("utf-8", "replace").decode("utf-8")
+    except Exception as encode_err:
+        logger.warning("UTF-8 encoding hardening failed: %s", encode_err)
+
     # Call Gemini API with retry logic
     start_time = time.time()
     parsed_review = None
@@ -268,8 +296,12 @@ def gemini_review(paper: Dict) -> Dict:
 
             logger.info("Calling Gemini API (attempt %d/%d) for: %s", attempt + 1, MAX_REVIEW_RETRIES, title[:80])
 
+            # Final message sanitization before API call
+            sanitized_prompt = sanitize_for_llm(prompt)
+            sanitized_prompt = sanitized_prompt.encode("utf-8", "replace").decode("utf-8")
+
             response = model.generate_content(
-                prompt,
+                sanitized_prompt,
                 generation_config={
                     "temperature": 0.3,
                     "max_output_tokens": 1024,
@@ -289,6 +321,15 @@ def gemini_review(paper: Dict) -> Dict:
                               attempt + 1, response_text[:200])
 
         except Exception as e:
+            # Diagnostic: check for unicode issues in the prompt
+            try:
+                u2028_count = sanitized_prompt.count('\u2028') if 'sanitized_prompt' in locals() else prompt.count('\u2028')
+                u2029_count = sanitized_prompt.count('\u2029') if 'sanitized_prompt' in locals() else prompt.count('\u2029')
+                if u2028_count > 0 or u2029_count > 0:
+                    logger.error("Unicode separators detected in prompt: U+2028=%d, U+2029=%d", u2028_count, u2029_count)
+            except:
+                pass  # Don't let diagnostic fail the error handling
+
             logger.warning("Gemini API call failed on attempt %d: %s", attempt + 1, str(e))
             if attempt == MAX_REVIEW_RETRIES - 1:
                 # Last attempt failed

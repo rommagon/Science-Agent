@@ -175,6 +175,13 @@ def gpt_evaluate(
     # Final sanitization of prompt string before API call (last mile defense)
     prompt = sanitize_for_llm(prompt)
 
+    # Extra hardening: UTF-8 encode/decode to prevent implicit ascii encoding
+    # This ensures that even if sanitization missed something, we won't crash
+    try:
+        prompt = prompt.encode("utf-8", "replace").decode("utf-8")
+    except Exception as encode_err:
+        logger.warning("UTF-8 encoding hardening failed: %s", encode_err)
+
     # Call GPT API with retry logic
     start_time = time.time()
     parsed_evaluation = None
@@ -188,16 +195,22 @@ def gpt_evaluate(
             logger.info("Calling GPT evaluator (attempt %d/%d) for: %s",
                        attempt + 1, MAX_REVIEW_RETRIES, title[:80])
 
+            # Final message sanitization before API call
+            system_msg = "You are a meta-evaluator. Respond only with valid JSON."
+            system_msg = sanitize_for_llm(system_msg).encode("utf-8", "replace").decode("utf-8")
+
+            user_msg = sanitize_for_llm(prompt).encode("utf-8", "replace").decode("utf-8")
+
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a meta-evaluator. Respond only with valid JSON."
+                        "content": system_msg
                     },
                     {
                         "role": "user",
-                        "content": prompt
+                        "content": user_msg
                     }
                 ],
                 temperature=0.3,
@@ -217,6 +230,15 @@ def gpt_evaluate(
                               attempt + 1, response_text[:200])
 
         except Exception as e:
+            # Diagnostic: check for unicode issues in the prompt
+            try:
+                u2028_count = user_msg.count('\u2028') if 'user_msg' in locals() else prompt.count('\u2028')
+                u2029_count = user_msg.count('\u2029') if 'user_msg' in locals() else prompt.count('\u2029')
+                if u2028_count > 0 or u2029_count > 0:
+                    logger.error("Unicode separators detected in prompt: U+2028=%d, U+2029=%d", u2028_count, u2029_count)
+            except:
+                pass  # Don't let diagnostic fail the error handling
+
             logger.warning("GPT API call failed on attempt %d: %s", attempt + 1, str(e))
             if attempt == MAX_REVIEW_RETRIES - 1:
                 # Last attempt failed
