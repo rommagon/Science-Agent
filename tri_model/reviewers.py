@@ -21,6 +21,7 @@ from config.tri_model_config import (
     MAX_REVIEW_RETRIES,
 )
 from tri_model.prompts import get_claude_prompt, get_gemini_prompt
+from tri_model.text_sanitize import sanitize_for_llm
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,11 @@ def claude_review(paper: Dict) -> Dict:
             "error": "Missing title",
             "reviewed_at": datetime.now().isoformat(),
         }
+
+    # Sanitize text to avoid unicode encoding issues (U+2028, U+2029, etc.)
+    title = sanitize_for_llm(title)
+    source = sanitize_for_llm(source)
+    abstract = sanitize_for_llm(abstract)
 
     prompt = get_claude_prompt(title, source, abstract)
 
@@ -236,6 +242,11 @@ def gemini_review(paper: Dict) -> Dict:
             "reviewed_at": datetime.now().isoformat(),
         }
 
+    # Sanitize text to avoid unicode encoding issues (U+2028, U+2029, etc.)
+    title = sanitize_for_llm(title)
+    source = sanitize_for_llm(source)
+    abstract = sanitize_for_llm(abstract)
+
     prompt = get_gemini_prompt(title, source, abstract)
 
     # Call Gemini API with retry logic
@@ -244,6 +255,10 @@ def gemini_review(paper: Dict) -> Dict:
 
     for attempt in range(MAX_REVIEW_RETRIES):
         try:
+            # TODO: Migrate from deprecated google.generativeai to google.genai
+            # The google-generativeai package is deprecated. Future versions should use:
+            # from google import genai
+            # See: https://ai.google.dev/gemini-api/docs/migrate-to-v1-5
             import google.generativeai as genai
 
             genai.configure(api_key=GEMINI_API_KEY)
