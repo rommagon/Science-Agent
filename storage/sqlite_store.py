@@ -120,6 +120,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         cursor.execute("INSERT INTO schema_version (version) VALUES (7)")
         current_version = 7
 
+    # Ensure credibility columns exist (idempotent check run on every init)
+    _ensure_tri_model_credibility_columns(cursor)
+
     conn.commit()
     logger.info("Database schema initialized (version %d)", current_version)
 
@@ -377,29 +380,6 @@ def _migrate_to_v7(cursor: sqlite3.Cursor) -> None:
         )
     """)
 
-    # Migrate existing databases - add credibility columns if they don't exist
-    try:
-        cursor.execute("PRAGMA table_info(tri_model_scoring_events)")
-        columns = [row[1] for row in cursor.fetchall()]
-
-        if "credibility_score" not in columns:
-            cursor.execute("ALTER TABLE tri_model_scoring_events ADD COLUMN credibility_score INTEGER")
-            logger.info("Added credibility_score column to tri_model_scoring_events")
-
-        if "credibility_reason" not in columns:
-            cursor.execute("ALTER TABLE tri_model_scoring_events ADD COLUMN credibility_reason TEXT")
-            logger.info("Added credibility_reason column to tri_model_scoring_events")
-
-        if "credibility_confidence" not in columns:
-            cursor.execute("ALTER TABLE tri_model_scoring_events ADD COLUMN credibility_confidence TEXT")
-            logger.info("Added credibility_confidence column to tri_model_scoring_events")
-
-        if "credibility_signals_json" not in columns:
-            cursor.execute("ALTER TABLE tri_model_scoring_events ADD COLUMN credibility_signals_json TEXT")
-            logger.info("Added credibility_signals_json column to tri_model_scoring_events")
-    except Exception as e:
-        logger.warning("Error during tri_model_scoring_events migration: %s", e)
-
     # Indexes for common queries
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_tri_model_events_run_id
@@ -427,6 +407,41 @@ def _migrate_to_v7(cursor: sqlite3.Cursor) -> None:
     """)
 
     logger.info("Schema migrated to version 7: added tri_model_scoring_events table")
+
+
+def _ensure_tri_model_credibility_columns(cursor: sqlite3.Cursor) -> None:
+    """Ensure tri_model_scoring_events table has credibility columns.
+
+    This is called on every initialization to handle cases where the table
+    was created without credibility columns (e.g., partial deployments).
+
+    Args:
+        cursor: Database cursor
+    """
+    try:
+        cursor.execute("PRAGMA table_info(tri_model_scoring_events)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        # Add missing credibility columns
+        credibility_columns = [
+            ("credibility_score", "INTEGER"),
+            ("credibility_reason", "TEXT"),
+            ("credibility_confidence", "TEXT"),
+            ("credibility_signals_json", "TEXT"),
+        ]
+
+        for col_name, col_type in credibility_columns:
+            if col_name not in columns:
+                cursor.execute(f"ALTER TABLE tri_model_scoring_events ADD COLUMN {col_name} {col_type}")
+                logger.info("Added %s column to tri_model_scoring_events", col_name)
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e).lower():
+            # Table doesn't exist yet, will be created by migration
+            logger.debug("tri_model_scoring_events table doesn't exist yet, will be created by migration")
+        else:
+            logger.warning("Error ensuring tri_model credibility columns: %s", e)
+    except Exception as e:
+        logger.warning("Unexpected error ensuring tri_model credibility columns: %s", e)
 
 
 def _get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:

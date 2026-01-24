@@ -142,9 +142,10 @@ def claude_review(paper: Dict) -> Dict:
     except Exception as encode_err:
         logger.warning("UTF-8 encoding hardening failed: %s", encode_err)
 
-    # Call Claude API with retry logic
+    # Call Claude API with retry logic and model fallback
     start_time = time.time()
     parsed_review = None
+    successful_model = None
 
     for attempt in range(MAX_REVIEW_RETRIES):
         try:
@@ -165,25 +166,62 @@ def claude_review(paper: Dict) -> Dict:
             sanitized_prompt = sanitize_for_llm(prompt)
             sanitized_prompt = sanitized_prompt.encode("utf-8", "replace").decode("utf-8")
 
-            response = client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=1024,
-                temperature=0.3,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": sanitized_prompt
-                    }
-                ],
-                timeout=REVIEW_TIMEOUT_SECONDS,
-            )
+            # Model fallback: Try preferred model, then fallbacks if 404 not_found_error
+            models_to_try = [CLAUDE_MODEL, "claude-3-haiku-20240307", "claude-3-5-sonnet-20241022"]
+            model_used = None
+            last_error = None
+
+            for model_name in models_to_try:
+                try:
+                    logger.info("Trying Claude model: %s", model_name)
+                    response = client.messages.create(
+                        model=model_name,
+                        max_tokens=1024,
+                        temperature=0.3,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": sanitized_prompt
+                            }
+                        ],
+                        timeout=REVIEW_TIMEOUT_SECONDS,
+                    )
+
+                    # Success - record which model worked
+                    model_used = model_name
+                    successful_model = model_name
+                    logger.info("Successfully called Claude with model: %s", model_name)
+                    break
+
+                except Exception as model_err:
+                    last_error = model_err
+                    # Check if this is a 404 model not found error
+                    error_str = str(model_err).lower()
+                    is_404_model_error = (
+                        hasattr(model_err, 'status_code') and model_err.status_code == 404
+                    ) or (
+                        'not_found_error' in error_str and 'model' in error_str
+                    ) or (
+                        '404' in error_str and 'model' in error_str
+                    )
+
+                    if is_404_model_error:
+                        logger.warning("Model %s not found (404), trying fallback", model_name)
+                        continue  # Try next fallback model
+                    else:
+                        # Non-404 error, don't try fallbacks
+                        raise model_err
+
+            # If no model worked, raise the last error
+            if not model_used:
+                raise last_error
 
             response_text = response.content[0].text
 
             parsed_review = _parse_review_json(response_text)
             if parsed_review:
-                logger.info("Successfully got Claude review for: %s (score=%d)",
-                           title[:80], parsed_review["relevancy_score"])
+                logger.info("Successfully got Claude review for: %s (score=%d, model=%s)",
+                           title[:80], parsed_review["relevancy_score"], model_used)
                 break
             else:
                 logger.warning("Failed to parse Claude response on attempt %d: %s",
@@ -206,7 +244,7 @@ def claude_review(paper: Dict) -> Dict:
                 return {
                     "success": False,
                     "review": None,
-                    "model": CLAUDE_MODEL,
+                    "model": successful_model or CLAUDE_MODEL,
                     "version": CLAUDE_REVIEW_VERSION,
                     "latency_ms": latency_ms,
                     "error": f"API error after {MAX_REVIEW_RETRIES} attempts: {str(e)}",
@@ -219,7 +257,7 @@ def claude_review(paper: Dict) -> Dict:
         return {
             "success": True,
             "review": parsed_review,
-            "model": CLAUDE_MODEL,
+            "model": successful_model or CLAUDE_MODEL,
             "version": CLAUDE_REVIEW_VERSION,
             "latency_ms": latency_ms,
             "error": None,
@@ -229,7 +267,7 @@ def claude_review(paper: Dict) -> Dict:
         return {
             "success": False,
             "review": None,
-            "model": CLAUDE_MODEL,
+            "model": successful_model or CLAUDE_MODEL,
             "version": CLAUDE_REVIEW_VERSION,
             "latency_ms": latency_ms,
             "error": f"Failed to parse response after {MAX_REVIEW_RETRIES} attempts",
