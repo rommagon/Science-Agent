@@ -76,23 +76,71 @@ def get_available_reviewers() -> list[str]:
     return reviewers
 
 
-def validate_config() -> tuple[bool, Optional[str]]:
+def normalize_validation_result(result) -> dict:
+    """Normalize validation result to dict format.
+
+    Handles both legacy tuple format and new dict format for backwards compatibility.
+
+    Args:
+        result: Either a tuple (bool, str) or dict {"valid": bool, "errors": list, ...}
+
+    Returns:
+        Normalized dict with keys: valid, errors, details
+    """
+    # If already a dict, return as-is (or normalize if missing keys)
+    if isinstance(result, dict):
+        return {
+            "valid": result.get("valid", False),
+            "errors": result.get("errors", []),
+            "details": result.get("details"),
+        }
+
+    # If tuple, convert to dict
+    if isinstance(result, tuple):
+        is_valid, error_message = result
+        if is_valid:
+            return {"valid": True, "errors": [], "details": None}
+        else:
+            return {
+                "valid": False,
+                "errors": [error_message] if error_message else [],
+                "details": error_message,
+            }
+
+    # Fallback for unexpected types
+    return {"valid": False, "errors": ["Invalid validation result type"], "details": None}
+
+
+def validate_config() -> dict:
     """Validate tri-model configuration.
 
     Returns:
-        (is_valid, error_message)
+        Dictionary with validation result:
+        {
+            "valid": bool,
+            "errors": list[str],  # Empty list if valid
+            "details": str or None  # Human-readable summary
+        }
     """
     if not ENABLE_TRI_MODEL_MINI_DAILY:
-        return True, None  # Not enabled, no validation needed
+        return {"valid": True, "errors": [], "details": None}
 
     reviewers = get_available_reviewers()
+    errors = []
 
     if not reviewers:
-        return False, "No reviewer API keys configured (need CLAUDE_API_KEY or GEMINI_API_KEY)"
+        errors.append("No reviewer API keys configured (need CLAUDE_API_KEY or GEMINI_API_KEY)")
 
     # Check that we have OpenAI key for evaluator
     openai_key = os.getenv("SPOTITEARLY_LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not openai_key:
-        return False, "No OpenAI API key for GPT evaluator (need SPOTITEARLY_LLM_API_KEY or OPENAI_API_KEY)"
+        errors.append("No OpenAI API key for GPT evaluator (need SPOTITEARLY_LLM_API_KEY or OPENAI_API_KEY)")
 
-    return True, None
+    if errors:
+        return {
+            "valid": False,
+            "errors": errors,
+            "details": f"{len(errors)} configuration error(s) found"
+        }
+
+    return {"valid": True, "errors": [], "details": None}

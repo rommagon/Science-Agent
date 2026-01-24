@@ -1,449 +1,94 @@
-"""SQLite storage for acitrack publications.
+"""PostgreSQL storage for acitrack publications.
 
-This module provides persistent storage for all fetched publications,
+This module provides persistent storage for all fetched publications using PostgreSQL,
 enabling future trend analysis and historical queries.
 
-The database is additive-only and does not affect existing pipeline behavior.
-If the database fails, the pipeline continues normally with a warning.
+The database operations are non-blocking - if operations fail, the pipeline continues
+with a warning.
 """
 
+import json
 import logging
-import sqlite3
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
+
+import psycopg2
+from psycopg2.extras import execute_values
+from psycopg2 import pool
 
 from acitrack_types import Publication
 
 logger = logging.getLogger(__name__)
 
-# Database file location
-DEFAULT_DB_PATH = "data/db/acitrack.db"
-
-# Schema version for future migrations
-SCHEMA_VERSION = 7  # Bumped for tri_model_scoring_events table
+# Connection pool (initialized lazily)
+_connection_pool = None
 
 
-def _init_schema(conn: sqlite3.Connection) -> None:
-    """Initialize the database schema.
+def _get_connection_pool(database_url: str) -> pool.SimpleConnectionPool:
+    """Get or create connection pool.
 
     Args:
-        conn: SQLite database connection
-    """
-    cursor = conn.cursor()
-
-    # Publications table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS publications (
-            id TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            authors TEXT,
-            source TEXT NOT NULL,
-            venue TEXT,
-            published_date TEXT,
-            url TEXT,
-            raw_text TEXT,
-            summary TEXT,
-            run_id TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            source_names TEXT
-        )
-    """)
-
-    # Indexes for common queries
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_publications_published_date
-        ON publications(published_date)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_publications_source
-        ON publications(source)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_publications_run_id
-        ON publications(run_id)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_publications_created_at
-        ON publications(created_at)
-    """)
-
-    # Schema version tracking
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS schema_version (
-            version INTEGER PRIMARY KEY,
-            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    # Get current schema version
-    cursor.execute("SELECT MAX(version) FROM schema_version")
-    row = cursor.fetchone()
-    current_version = row[0] if row[0] is not None else 0
-
-    # Apply migrations if needed
-    if current_version < 2:
-        logger.info("Migrating schema from version %d to 2", current_version)
-        _migrate_to_v2(cursor)
-        cursor.execute("INSERT INTO schema_version (version) VALUES (2)")
-        current_version = 2
-
-    if current_version < 3:
-        logger.info("Migrating schema from version %d to 3", current_version)
-        _migrate_to_v3(cursor)
-        cursor.execute("INSERT INTO schema_version (version) VALUES (3)")
-        current_version = 3
-
-    if current_version < 4:
-        logger.info("Migrating schema from version %d to 4", current_version)
-        _migrate_to_v4(cursor)
-        cursor.execute("INSERT INTO schema_version (version) VALUES (4)")
-        current_version = 4
-
-    if current_version < 5:
-        logger.info("Migrating schema from version %d to 5", current_version)
-        _migrate_to_v5(cursor)
-        cursor.execute("INSERT INTO schema_version (version) VALUES (5)")
-        current_version = 5
-
-    if current_version < 6:
-        logger.info("Migrating schema from version %d to 6", current_version)
-        _migrate_to_v6(cursor)
-        cursor.execute("INSERT INTO schema_version (version) VALUES (6)")
-        current_version = 6
-
-    if current_version < 7:
-        logger.info("Migrating schema from version %d to 7", current_version)
-        _migrate_to_v7(cursor)
-        cursor.execute("INSERT INTO schema_version (version) VALUES (7)")
-        current_version = 7
-
-    conn.commit()
-    logger.info("Database schema initialized (version %d)", current_version)
-
-
-def _migrate_to_v2(cursor: sqlite3.Cursor) -> None:
-    """Migrate database schema to version 2.
-
-    Adds run history tracking tables.
-
-    Args:
-        cursor: Database cursor
-    """
-    # Runs table for run metadata
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS runs (
-            run_id TEXT PRIMARY KEY,
-            started_at TEXT NOT NULL,
-            since_timestamp TEXT,
-            max_items_per_source INTEGER,
-            sources_count INTEGER,
-            total_fetched INTEGER,
-            total_deduped INTEGER,
-            new_count INTEGER,
-            unchanged_count INTEGER,
-            summarized_count INTEGER,
-            upload_drive INTEGER DEFAULT 0
-        )
-    """)
-
-    # Pub_runs table for per-run publication tracking
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS pub_runs (
-            run_id TEXT NOT NULL,
-            pub_id TEXT NOT NULL,
-            status TEXT NOT NULL,
-            source TEXT,
-            published_date TEXT,
-            PRIMARY KEY (run_id, pub_id)
-        )
-    """)
-
-    # Indexes for pub_runs queries
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_pub_runs_run_id
-        ON pub_runs(run_id)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_pub_runs_status
-        ON pub_runs(status)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_pub_runs_source
-        ON pub_runs(source)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_pub_runs_published_date
-        ON pub_runs(published_date)
-    """)
-
-    logger.info("Schema migrated to version 2: added runs and pub_runs tables")
-
-
-def _migrate_to_v3(cursor: sqlite3.Cursor) -> None:
-    """Migrate database schema to version 3.
-
-    Adds must-reads rerank cache table.
-
-    Args:
-        cursor: Database cursor
-    """
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS must_reads_rerank_cache (
-            pub_id TEXT NOT NULL,
-            rerank_version TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            model TEXT,
-            llm_score REAL,
-            llm_rank INTEGER,
-            llm_reason TEXT,
-            llm_why TEXT,
-            input_fingerprint TEXT,
-            response_json TEXT,
-            PRIMARY KEY (pub_id, rerank_version)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_must_reads_rerank_cache_created_at
-        ON must_reads_rerank_cache(created_at)
-    """)
-
-    logger.info("Schema migrated to version 3: added must_reads_rerank_cache table")
-
-
-def _migrate_to_v4(cursor: sqlite3.Cursor) -> None:
-    """Migrate database schema to version 4.
-
-    Adds bibliometric enrichment columns to publications table.
-
-    Args:
-        cursor: Database cursor
-    """
-    # Add new columns for bibliometric data
-    new_columns = [
-        ("doi", "TEXT"),
-        ("citation_count", "INTEGER"),
-        ("citations_per_year", "REAL"),
-        ("venue_name", "TEXT"),
-        ("pub_type", "TEXT"),
-    ]
-
-    for col_name, col_type in new_columns:
-        try:
-            cursor.execute(f"ALTER TABLE publications ADD COLUMN {col_name} {col_type}")
-            logger.info("Added column '%s' to publications table", col_name)
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" in str(e).lower():
-                logger.debug("Column '%s' already exists, skipping", col_name)
-            else:
-                raise
-
-    logger.info("Schema migrated to version 4: added bibliometric columns")
-
-
-def _migrate_to_v5(cursor: sqlite3.Cursor) -> None:
-    """Migrate database schema to version 5.
-
-    Adds enrichment columns to publications table.
-
-    Args:
-        cursor: Database cursor
-    """
-    # Add enrichment columns
-    enrichment_columns = [
-        ("relevance_score", "INTEGER"),
-        ("credibility_score", "INTEGER"),
-        ("main_interesting_fact", "TEXT"),
-        ("relevance_to_spotitearly", "TEXT"),
-        ("modality_tags", "TEXT"),
-        ("sample_size", "TEXT"),
-        ("study_type", "TEXT"),
-        ("key_metrics", "TEXT"),
-        ("sponsor_flag", "TEXT"),
-    ]
-
-    for col_name, col_type in enrichment_columns:
-        try:
-            cursor.execute(f"ALTER TABLE publications ADD COLUMN {col_name} {col_type}")
-            logger.info("Added column '%s' to publications table", col_name)
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" in str(e).lower():
-                logger.debug("Column '%s' already exists, skipping", col_name)
-            else:
-                raise
-
-    logger.info("Schema migrated to version 5: added enrichment columns")
-
-
-def _migrate_to_v6(cursor: sqlite3.Cursor) -> None:
-    """Migrate database schema to version 6.
-
-    Adds relevancy scoring events table.
-
-    Args:
-        cursor: Database cursor
-    """
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS relevancy_scoring_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT NOT NULL,
-            mode TEXT NOT NULL,
-            publication_id TEXT NOT NULL,
-            source TEXT,
-            prompt_version TEXT NOT NULL,
-            model TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            relevancy_score INTEGER,
-            relevancy_reason TEXT,
-            confidence TEXT,
-            signals_json TEXT,
-            input_fingerprint TEXT,
-            raw_response_json TEXT,
-            latency_ms INTEGER,
-            cost_usd REAL,
-            UNIQUE(run_id, publication_id, prompt_version)
-        )
-    """)
-
-    # Indexes for common queries
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_relevancy_events_run_id
-        ON relevancy_scoring_events(run_id)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_relevancy_events_pub_id
-        ON relevancy_scoring_events(publication_id)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_relevancy_events_created_at
-        ON relevancy_scoring_events(created_at)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_relevancy_events_mode
-        ON relevancy_scoring_events(mode)
-    """)
-
-    logger.info("Schema migrated to version 6: added relevancy_scoring_events table")
-
-
-def _migrate_to_v7(cursor: sqlite3.Cursor) -> None:
-    """Migrate database schema to version 7.
-
-    Adds tri-model scoring events table.
-
-    Args:
-        cursor: Database cursor
-    """
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tri_model_scoring_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT NOT NULL,
-            mode TEXT NOT NULL,
-            publication_id TEXT NOT NULL,
-            title TEXT,
-            source TEXT,
-            published_date TEXT,
-            claude_review_json TEXT,
-            gemini_review_json TEXT,
-            gpt_eval_json TEXT,
-            final_relevancy_score INTEGER,
-            final_relevancy_reason TEXT,
-            final_signals_json TEXT,
-            final_summary TEXT,
-            agreement_level TEXT,
-            disagreements TEXT,
-            evaluator_rationale TEXT,
-            confidence TEXT,
-            prompt_versions_json TEXT,
-            model_names_json TEXT,
-            claude_latency_ms INTEGER,
-            gemini_latency_ms INTEGER,
-            gpt_latency_ms INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(run_id, publication_id)
-        )
-    """)
-
-    # Indexes for common queries
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tri_model_events_run_id
-        ON tri_model_scoring_events(run_id)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tri_model_events_pub_id
-        ON tri_model_scoring_events(publication_id)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tri_model_events_created_at
-        ON tri_model_scoring_events(created_at)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tri_model_events_mode
-        ON tri_model_scoring_events(mode)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_tri_model_events_score
-        ON tri_model_scoring_events(final_relevancy_score)
-    """)
-
-    logger.info("Schema migrated to version 7: added tri_model_scoring_events table")
-
-
-def _get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    """Get a connection to the SQLite database.
-
-    Creates the database and schema if they don't exist.
-
-    Args:
-        db_path: Path to the database file
+        database_url: PostgreSQL connection URL
 
     Returns:
-        SQLite database connection
-
-    Raises:
-        sqlite3.Error: If connection fails
+        Connection pool instance
     """
-    # Ensure database directory exists
-    db_file = Path(db_path)
-    db_file.parent.mkdir(parents=True, exist_ok=True)
+    global _connection_pool
 
-    # Connect to database
-    conn = sqlite3.connect(db_path)
+    if _connection_pool is None:
+        try:
+            _connection_pool = pool.SimpleConnectionPool(
+                minconn=1,
+                maxconn=10,
+                dsn=database_url
+            )
+            logger.info("PostgreSQL connection pool initialized")
+        except Exception as e:
+            logger.error("Failed to create connection pool: %s", e)
+            raise
 
-    # Initialize schema if needed
-    _init_schema(conn)
+    return _connection_pool
 
-    return conn
+
+def _get_connection(database_url: str):
+    """Get a connection from the pool.
+
+    Args:
+        database_url: PostgreSQL connection URL
+
+    Returns:
+        Database connection
+    """
+    pool_instance = _get_connection_pool(database_url)
+    return pool_instance.getconn()
+
+
+def _put_connection(conn):
+    """Return a connection to the pool.
+
+    Args:
+        conn: Database connection
+    """
+    global _connection_pool
+    if _connection_pool:
+        _connection_pool.putconn(conn)
 
 
 def store_publications(
     publications: List[Publication],
     run_id: str,
-    db_path: str = DEFAULT_DB_PATH,
+    database_url: str,
 ) -> dict:
-    """Store publications in the SQLite database.
+    """Store publications in the PostgreSQL database.
 
-    This function is idempotent - duplicate publications (same ID) are ignored.
+    This function is idempotent - duplicate publications (same ID) are updated.
     If the database operation fails, the function logs a warning and returns
     error information without raising an exception.
 
     Args:
         publications: List of Publication objects to store
         run_id: Run identifier for this batch
-        db_path: Path to database file (default: data/db/acitrack.db)
+        database_url: PostgreSQL connection URL
 
     Returns:
         Dictionary with storage statistics:
@@ -465,8 +110,9 @@ def store_publications(
             "error": None,
         }
 
+    conn = None
     try:
-        conn = _get_connection(db_path)
+        conn = _get_connection(database_url)
         cursor = conn.cursor()
 
         inserted = 0
@@ -478,10 +124,11 @@ def store_publications(
                 source_names_str = ", ".join(pub.source_names) if getattr(pub, "source_names", None) else ""
 
                 cursor.execute("""
-                    INSERT OR IGNORE INTO publications (
-                        id, title, authors, source, venue, published_date,
+                    INSERT INTO papers (
+                        id, title, authors, source, venue, published_at,
                         url, raw_text, summary, run_id, source_names
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
                 """, (
                     pub.id,
                     pub.title,
@@ -501,13 +148,12 @@ def store_publications(
                 else:
                     duplicates += 1
 
-            except sqlite3.Error as e:
+            except Exception as e:
                 logger.warning("Failed to insert publication %s: %s", getattr(pub, "id", "UNKNOWN"), e)
                 duplicates += 1
                 continue
 
         conn.commit()
-        conn.close()
 
         logger.info(
             "Stored publications to database: %d total, %d inserted, %d duplicates",
@@ -526,6 +172,8 @@ def store_publications(
 
     except Exception as e:
         logger.error("Failed to store publications: %s", e)
+        if conn:
+            conn.rollback()
         return {
             "success": False,
             "total": len(publications) if publications else 0,
@@ -533,6 +181,10 @@ def store_publications(
             "duplicates": 0,
             "error": str(e),
         }
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
 
 
 def store_run_history(
@@ -547,9 +199,10 @@ def store_run_history(
     summarized_count: int,
     max_items_per_source: Optional[int] = None,
     upload_drive: bool = False,
-    db_path: str = DEFAULT_DB_PATH,
+    publications_with_status: Optional[List[dict]] = None,
+    database_url: str = None,
 ) -> dict:
-    """Store run history metadata.
+    """Store run history metadata and run_papers associations.
 
     Args:
         run_id: Run identifier
@@ -563,25 +216,40 @@ def store_run_history(
         summarized_count: Count of summarized publications
         max_items_per_source: Max items per source (optional)
         upload_drive: Whether Drive upload was enabled
-        db_path: Path to database file
+        publications_with_status: List of publication dicts with status field
+        database_url: PostgreSQL connection URL
 
     Returns:
         Dictionary with storage result:
         {
             "success": bool,
-            "error": str or None
+            "error": str or None,
+            "pub_runs_inserted": int
         }
     """
+    conn = None
     try:
-        conn = _get_connection(db_path)
+        conn = _get_connection(database_url)
         cursor = conn.cursor()
 
+        # Store run metadata
         cursor.execute("""
-            INSERT OR REPLACE INTO runs (
+            INSERT INTO runs (
                 run_id, started_at, since_timestamp, max_items_per_source,
                 sources_count, total_fetched, total_deduped, new_count,
                 unchanged_count, summarized_count, upload_drive
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (run_id) DO UPDATE SET
+                started_at = EXCLUDED.started_at,
+                since_timestamp = EXCLUDED.since_timestamp,
+                max_items_per_source = EXCLUDED.max_items_per_source,
+                sources_count = EXCLUDED.sources_count,
+                total_fetched = EXCLUDED.total_fetched,
+                total_deduped = EXCLUDED.total_deduped,
+                new_count = EXCLUDED.new_count,
+                unchanged_count = EXCLUDED.unchanged_count,
+                summarized_count = EXCLUDED.summarized_count,
+                upload_drive = EXCLUDED.upload_drive
         """, (
             run_id,
             started_at,
@@ -593,40 +261,73 @@ def store_run_history(
             new_count,
             unchanged_count,
             summarized_count,
-            1 if upload_drive else 0,
+            upload_drive,
         ))
 
-        conn.commit()
-        conn.close()
+        # Store run_papers associations if provided
+        pub_runs_inserted = 0
+        if publications_with_status:
+            run_papers_data = []
+            for pub in publications_with_status:
+                run_papers_data.append((
+                    run_id,
+                    pub.get("id"),
+                    pub.get("status", "UNKNOWN"),
+                    pub.get("source"),
+                    pub.get("date"),
+                ))
 
-        logger.info("Stored run history for run_id=%s", run_id)
+            execute_values(cursor, """
+                INSERT INTO run_papers (run_id, pub_id, status, source, published_at)
+                VALUES %s
+                ON CONFLICT (run_id, pub_id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    source = EXCLUDED.source,
+                    published_at = EXCLUDED.published_at
+            """, run_papers_data)
+
+            pub_runs_inserted = len(run_papers_data)
+
+        conn.commit()
+
+        logger.info("Stored run history for run_id=%s (%d pub_runs)", run_id, pub_runs_inserted)
 
         return {
             "success": True,
             "error": None,
+            "pub_runs_inserted": pub_runs_inserted,
         }
 
     except Exception as e:
         logger.warning("Failed to store run history: %s (non-blocking)", e)
+        if conn:
+            conn.rollback()
         return {
             "success": False,
             "error": str(e),
+            "pub_runs_inserted": 0,
         }
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
 
 
-def get_run_history(limit: int = 10, db_path: str = DEFAULT_DB_PATH) -> list:
+def get_run_history(limit: int = 10, database_url: str = None) -> list:
     """Get recent run history.
 
     Args:
         limit: Maximum number of runs to return
-        db_path: Path to database file
+        database_url: PostgreSQL connection URL
 
     Returns:
         List of run dictionaries, or empty list if query fails
     """
+    conn = None
     try:
-        conn = _get_connection(db_path)
+        conn = _get_connection(database_url)
         cursor = conn.cursor()
+
         cursor.execute("""
             SELECT
                 run_id, started_at, since_timestamp, max_items_per_source,
@@ -634,7 +335,7 @@ def get_run_history(limit: int = 10, db_path: str = DEFAULT_DB_PATH) -> list:
                 unchanged_count, summarized_count, upload_drive
             FROM runs
             ORDER BY started_at DESC
-            LIMIT ?
+            LIMIT %s
         """, (limit,))
 
         results = []
@@ -650,15 +351,18 @@ def get_run_history(limit: int = 10, db_path: str = DEFAULT_DB_PATH) -> list:
                 "new_count": row[7],
                 "unchanged_count": row[8],
                 "summarized_count": row[9],
-                "upload_drive": row[10] == 1,
+                "upload_drive": row[10],
             })
 
-        conn.close()
         return results
 
     except Exception as e:
         logger.warning("Failed to get run history: %s", e)
         return []
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
 
 
 def store_relevancy_scoring_event(
@@ -676,7 +380,7 @@ def store_relevancy_scoring_event(
     raw_response: Optional[Dict],
     latency_ms: Optional[int],
     cost_usd: Optional[float],
-    db_path: str = DEFAULT_DB_PATH,
+    database_url: str = None,
 ) -> dict:
     """Store a relevancy scoring event.
 
@@ -695,26 +399,38 @@ def store_relevancy_scoring_event(
         raw_response: Raw API response
         latency_ms: Latency in milliseconds
         cost_usd: Cost in USD
-        db_path: Path to database file
+        database_url: PostgreSQL connection URL
 
     Returns:
         Dictionary with storage result
     """
-    import json
-
+    conn = None
     try:
-        conn = _get_connection(db_path)
+        conn = _get_connection(database_url)
         cursor = conn.cursor()
 
         signals_json = json.dumps(signals) if signals else None
         raw_response_json = json.dumps(raw_response) if raw_response else None
 
         cursor.execute("""
-            INSERT OR REPLACE INTO relevancy_scoring_events (
+            INSERT INTO relevancy_events (
                 run_id, mode, publication_id, source, prompt_version, model,
                 relevancy_score, relevancy_reason, confidence, signals_json,
                 input_fingerprint, raw_response_json, latency_ms, cost_usd
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (run_id, publication_id, prompt_version) DO UPDATE SET
+                mode = EXCLUDED.mode,
+                source = EXCLUDED.source,
+                model = EXCLUDED.model,
+                relevancy_score = EXCLUDED.relevancy_score,
+                relevancy_reason = EXCLUDED.relevancy_reason,
+                confidence = EXCLUDED.confidence,
+                signals_json = EXCLUDED.signals_json,
+                input_fingerprint = EXCLUDED.input_fingerprint,
+                raw_response_json = EXCLUDED.raw_response_json,
+                latency_ms = EXCLUDED.latency_ms,
+                cost_usd = EXCLUDED.cost_usd,
+                created_at = CURRENT_TIMESTAMP
         """, (
             run_id,
             mode,
@@ -733,7 +449,6 @@ def store_relevancy_scoring_event(
         ))
 
         conn.commit()
-        conn.close()
 
         logger.debug(
             "Stored relevancy event: run_id=%s, pub_id=%s, score=%s",
@@ -749,37 +464,42 @@ def store_relevancy_scoring_event(
 
     except Exception as e:
         logger.warning("Failed to store relevancy event: %s", e)
+        if conn:
+            conn.rollback()
         return {
             "success": False,
             "error": str(e),
         }
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
 
 
 def get_relevancy_scores_for_run(
     run_id: str,
-    db_path: str = DEFAULT_DB_PATH,
+    database_url: str = None,
 ) -> Dict[str, Dict]:
     """Get all relevancy scores for a run.
 
     Args:
         run_id: Run identifier
-        db_path: Path to database file
+        database_url: PostgreSQL connection URL
 
     Returns:
         Dictionary mapping publication_id to score data
     """
-    import json
-
+    conn = None
     try:
-        conn = _get_connection(db_path)
+        conn = _get_connection(database_url)
         cursor = conn.cursor()
 
         cursor.execute("""
             SELECT
                 publication_id, relevancy_score, relevancy_reason, confidence,
                 signals_json, prompt_version, model, created_at
-            FROM relevancy_scoring_events
-            WHERE run_id = ?
+            FROM relevancy_events
+            WHERE run_id = %s
             ORDER BY created_at ASC
         """, (run_id,))
 
@@ -798,40 +518,36 @@ def get_relevancy_scores_for_run(
                 "created_at": row[7],
             }
 
-        conn.close()
         logger.debug("Retrieved %d relevancy scores for run_id=%s", len(results), run_id)
         return results
 
     except Exception as e:
         logger.warning("Failed to get relevancy scores for run %s: %s", run_id, e)
         return {}
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
 
 
 def export_relevancy_events_to_jsonl(
     run_id: str,
     output_path: str,
-    db_path: str = DEFAULT_DB_PATH,
+    database_url: str = None,
 ) -> dict:
     """Export relevancy scoring events for a run to JSONL file.
 
     Args:
         run_id: Run identifier to export
         output_path: Path to output JSONL file
-        db_path: Path to database file
+        database_url: PostgreSQL connection URL
 
     Returns:
-        Dictionary with export statistics:
-        {
-            "success": bool,
-            "events_exported": int,
-            "output_path": str,
-            "error": str or None
-        }
+        Dictionary with export statistics
     """
-    import json
-
+    conn = None
     try:
-        conn = _get_connection(db_path)
+        conn = _get_connection(database_url)
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -839,8 +555,8 @@ def export_relevancy_events_to_jsonl(
                 run_id, mode, publication_id, source, prompt_version, model,
                 created_at, relevancy_score, relevancy_reason, confidence,
                 signals_json, input_fingerprint, latency_ms, cost_usd
-            FROM relevancy_scoring_events
-            WHERE run_id = ?
+            FROM relevancy_events
+            WHERE run_id = %s
             ORDER BY created_at ASC
         """, (run_id,))
 
@@ -858,7 +574,7 @@ def export_relevancy_events_to_jsonl(
                     "source": row[3],
                     "prompt_version": row[4],
                     "model": row[5],
-                    "created_at": row[6],
+                    "created_at": row[6].isoformat() if row[6] else None,
                     "relevancy_score": row[7],
                     "relevancy_reason": row[8],
                     "confidence": row[9],
@@ -869,8 +585,6 @@ def export_relevancy_events_to_jsonl(
                 }
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
                 events_exported += 1
-
-        conn.close()
 
         logger.info("Exported %d relevancy events to %s", events_exported, output_path)
 
@@ -889,6 +603,10 @@ def export_relevancy_events_to_jsonl(
             "output_path": output_path,
             "error": str(e),
         }
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
 
 
 def store_tri_model_scoring_event(
@@ -914,7 +632,7 @@ def store_tri_model_scoring_event(
     claude_latency_ms: Optional[int],
     gemini_latency_ms: Optional[int],
     gpt_latency_ms: Optional[int],
-    db_path: str = DEFAULT_DB_PATH,
+    database_url: str = None,
 ) -> dict:
     """Store a tri-model scoring event.
 
@@ -941,26 +659,47 @@ def store_tri_model_scoring_event(
         claude_latency_ms: Claude latency
         gemini_latency_ms: Gemini latency
         gpt_latency_ms: GPT latency
-        db_path: Path to database file
+        database_url: PostgreSQL connection URL
 
     Returns:
         Dictionary with storage result
     """
-    import json
-
+    conn = None
     try:
-        conn = _get_connection(db_path)
+        conn = _get_connection(database_url)
         cursor = conn.cursor()
 
         cursor.execute("""
-            INSERT OR REPLACE INTO tri_model_scoring_events (
+            INSERT INTO tri_model_events (
                 run_id, mode, publication_id, title, source, published_date,
                 claude_review_json, gemini_review_json, gpt_eval_json,
                 final_relevancy_score, final_relevancy_reason, final_signals_json,
                 final_summary, agreement_level, disagreements, evaluator_rationale,
                 confidence, prompt_versions_json, model_names_json,
                 claude_latency_ms, gemini_latency_ms, gpt_latency_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (run_id, publication_id) DO UPDATE SET
+                mode = EXCLUDED.mode,
+                title = EXCLUDED.title,
+                source = EXCLUDED.source,
+                published_date = EXCLUDED.published_date,
+                claude_review_json = EXCLUDED.claude_review_json,
+                gemini_review_json = EXCLUDED.gemini_review_json,
+                gpt_eval_json = EXCLUDED.gpt_eval_json,
+                final_relevancy_score = EXCLUDED.final_relevancy_score,
+                final_relevancy_reason = EXCLUDED.final_relevancy_reason,
+                final_signals_json = EXCLUDED.final_signals_json,
+                final_summary = EXCLUDED.final_summary,
+                agreement_level = EXCLUDED.agreement_level,
+                disagreements = EXCLUDED.disagreements,
+                evaluator_rationale = EXCLUDED.evaluator_rationale,
+                confidence = EXCLUDED.confidence,
+                prompt_versions_json = EXCLUDED.prompt_versions_json,
+                model_names_json = EXCLUDED.model_names_json,
+                claude_latency_ms = EXCLUDED.claude_latency_ms,
+                gemini_latency_ms = EXCLUDED.gemini_latency_ms,
+                gpt_latency_ms = EXCLUDED.gpt_latency_ms,
+                created_at = CURRENT_TIMESTAMP
         """, (
             run_id,
             mode,
@@ -987,7 +726,6 @@ def store_tri_model_scoring_event(
         ))
 
         conn.commit()
-        conn.close()
 
         logger.debug(
             "Stored tri-model event: run_id=%s, pub_id=%s, score=%s",
@@ -1003,31 +741,36 @@ def store_tri_model_scoring_event(
 
     except Exception as e:
         logger.warning("Failed to store tri-model event: %s", e)
+        if conn:
+            conn.rollback()
         return {
             "success": False,
             "error": str(e),
         }
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
 
 
 def export_tri_model_events_to_jsonl(
     run_id: str,
     output_path: str,
-    db_path: str = DEFAULT_DB_PATH,
+    database_url: str = None,
 ) -> dict:
     """Export tri-model scoring events for a run to JSONL file.
 
     Args:
         run_id: Run identifier to export
         output_path: Path to output JSONL file
-        db_path: Path to database file
+        database_url: PostgreSQL connection URL
 
     Returns:
         Dictionary with export statistics
     """
-    import json
-
+    conn = None
     try:
-        conn = _get_connection(db_path)
+        conn = _get_connection(database_url)
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -1039,8 +782,8 @@ def export_tri_model_events_to_jsonl(
                 confidence, prompt_versions_json, model_names_json,
                 claude_latency_ms, gemini_latency_ms, gpt_latency_ms,
                 created_at
-            FROM tri_model_scoring_events
-            WHERE run_id = ?
+            FROM tri_model_events
+            WHERE run_id = %s
             ORDER BY created_at ASC
         """, (run_id,))
 
@@ -1074,12 +817,10 @@ def export_tri_model_events_to_jsonl(
                     "claude_latency_ms": row[19],
                     "gemini_latency_ms": row[20],
                     "gpt_latency_ms": row[21],
-                    "created_at": row[22],
+                    "created_at": row[22].isoformat() if row[22] else None,
                 }
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
                 events_exported += 1
-
-        conn.close()
 
         logger.info("Exported %d tri-model events to %s", events_exported, output_path)
 
@@ -1098,3 +839,7 @@ def export_tri_model_events_to_jsonl(
             "output_path": output_path,
             "error": str(e),
         }
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
