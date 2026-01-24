@@ -52,6 +52,7 @@ jobs:
           BACKEND_API_KEY: ${{ secrets.BACKEND_API_KEY }}
           # Force UTF-8 encoding to handle unicode characters
           PYTHONUTF8: '1'
+          PYTHONIOENCODING: 'utf-8'
           LC_ALL: 'C.UTF-8'
           LANG: 'C.UTF-8'
         run: |

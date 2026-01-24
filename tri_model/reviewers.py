@@ -21,7 +21,7 @@ from config.tri_model_config import (
     MAX_REVIEW_RETRIES,
 )
 from tri_model.prompts import get_claude_prompt, get_gemini_prompt
-from tri_model.text_sanitize import sanitize_for_llm
+from tri_model.text_sanitize import sanitize_for_llm, sanitize_paper_for_review
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,9 @@ def claude_review(paper: Dict) -> Dict:
             "reviewed_at": datetime.now().isoformat(),
         }
 
+    # Sanitize paper at entry point to remove unicode control characters
+    paper = sanitize_paper_for_review(paper)
+
     title = paper.get("title", "")
     source = paper.get("source", "")
     abstract = paper.get("raw_text") or paper.get("summary") or ""
@@ -125,12 +128,10 @@ def claude_review(paper: Dict) -> Dict:
             "reviewed_at": datetime.now().isoformat(),
         }
 
-    # Sanitize text to avoid unicode encoding issues (U+2028, U+2029, etc.)
-    title = sanitize_for_llm(title)
-    source = sanitize_for_llm(source)
-    abstract = sanitize_for_llm(abstract)
-
     prompt = get_claude_prompt(title, source, abstract)
+
+    # Final sanitization of prompt string before API call (last mile defense)
+    prompt = sanitize_for_llm(prompt)
 
     # Call Claude API with retry logic
     start_time = time.time()
@@ -227,6 +228,9 @@ def gemini_review(paper: Dict) -> Dict:
             "reviewed_at": datetime.now().isoformat(),
         }
 
+    # Sanitize paper at entry point to remove unicode control characters
+    paper = sanitize_paper_for_review(paper)
+
     title = paper.get("title", "")
     source = paper.get("source", "")
     abstract = paper.get("raw_text") or paper.get("summary") or ""
@@ -242,12 +246,10 @@ def gemini_review(paper: Dict) -> Dict:
             "reviewed_at": datetime.now().isoformat(),
         }
 
-    # Sanitize text to avoid unicode encoding issues (U+2028, U+2029, etc.)
-    title = sanitize_for_llm(title)
-    source = sanitize_for_llm(source)
-    abstract = sanitize_for_llm(abstract)
-
     prompt = get_gemini_prompt(title, source, abstract)
+
+    # Final sanitization of prompt string before API call (last mile defense)
+    prompt = sanitize_for_llm(prompt)
 
     # Call Gemini API with retry logic
     start_time = time.time()
