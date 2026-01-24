@@ -15,6 +15,9 @@ from config.tri_model_config import GPT_EVALUATOR_VERSION, REVIEW_TIMEOUT_SECOND
 from tri_model.prompts import get_gpt_evaluator_prompt
 from tri_model.text_sanitize import sanitize_for_llm, sanitize_paper_for_review
 
+# Import sanitize_secret for API key sanitization
+from config.tri_model_config import sanitize_secret
+
 logger = logging.getLogger(__name__)
 
 
@@ -111,8 +114,8 @@ def gpt_evaluate(
             }
         }
     """
-    # Get OpenAI API key
-    api_key = os.getenv("SPOTITEARLY_LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+    # Get OpenAI API key and sanitize it to remove unicode/control characters
+    api_key = sanitize_secret(os.getenv("SPOTITEARLY_LLM_API_KEY") or os.getenv("OPENAI_API_KEY"))
     if not api_key:
         return {
             "success": False,

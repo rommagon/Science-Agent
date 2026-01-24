@@ -23,6 +23,8 @@ from config.tri_model_config import (
 from tri_model.prompts import get_claude_prompt, get_gemini_prompt
 from tri_model.text_sanitize import sanitize_for_llm, sanitize_paper_for_review
 
+import hashlib
+
 logger = logging.getLogger(__name__)
 
 
@@ -147,6 +149,12 @@ def claude_review(paper: Dict) -> Dict:
     for attempt in range(MAX_REVIEW_RETRIES):
         try:
             from anthropic import Anthropic
+
+            # Safe debug logging for API key (only on first attempt)
+            if attempt == 0:
+                key_hash = hashlib.sha256(CLAUDE_API_KEY.encode('utf-8')).hexdigest()[:12]
+                logger.debug("Initializing Claude client: key_length=%d, key_hash=%s",
+                           len(CLAUDE_API_KEY), key_hash)
 
             client = Anthropic(api_key=CLAUDE_API_KEY)
 

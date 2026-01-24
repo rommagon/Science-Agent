@@ -15,15 +15,71 @@ Environment Variables:
 - MINI_DAILY_MAX_PAPERS: Maximum papers to review (default: 10)
 """
 
+import hashlib
+import logging
 import os
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+def sanitize_secret(value: str) -> Optional[str]:
+    """Sanitize API keys and secrets to remove problematic unicode/control characters.
+
+    This prevents 'ascii codec can't encode' errors that occur when secrets
+    containing unicode separators (U+2028, U+2029) or other control characters
+    are used in HTTP headers.
+
+    Args:
+        value: Raw secret string from environment variable
+
+    Returns:
+        Sanitized secret safe for use in HTTP headers, or None if input is falsy
+    """
+    if not value:
+        return None
+
+    # Strip leading/trailing whitespace
+    cleaned = value.strip()
+
+    # Replace unicode line/paragraph separators with newlines (then remove)
+    cleaned = cleaned.replace('\u2028', '\n')  # LINE SEPARATOR
+    cleaned = cleaned.replace('\u2029', '\n')  # PARAGRAPH SEPARATOR
+
+    # Remove all control characters except tab and newline
+    # Then remove tab/newline too since they're not valid in headers
+    sanitized_chars = []
+    removed_count = 0
+
+    for char in cleaned:
+        code = ord(char)
+        # Keep only printable ASCII (32-126) and common extended ASCII
+        # Headers should be ASCII-safe
+        if 32 <= code <= 126:
+            sanitized_chars.append(char)
+        else:
+            removed_count += 1
+
+    result = ''.join(sanitized_chars)
+
+    # Log sanitization if characters were removed (without exposing the secret)
+    if removed_count > 0:
+        # Create safe fingerprint for debugging
+        key_hash = hashlib.sha256(value.encode('utf-8', 'ignore')).hexdigest()[:12]
+        logger.warning(
+            "Sanitized secret (hash=%s): removed %d problematic character(s). "
+            "Original length=%d, sanitized length=%d",
+            key_hash, removed_count, len(value), len(result)
+        )
+
+    return result if result else None
 
 # Feature flag
 ENABLE_TRI_MODEL_MINI_DAILY = os.getenv("TRI_MODEL_MINI_DAILY", "false").lower() == "true"
 
-# API Keys
-CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# API Keys - sanitized to remove unicode/control characters that cause encoding errors
+CLAUDE_API_KEY = sanitize_secret(os.getenv("CLAUDE_API_KEY"))
+GEMINI_API_KEY = sanitize_secret(os.getenv("GEMINI_API_KEY"))
 
 # Model names
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
