@@ -1,0 +1,310 @@
+{
+  "generated_at": "2026-01-12T16:33:42.173169",
+  "summary_version": "v1",
+  "total_count": 20,
+  "cached_count": 18,
+  "generated_count": 2,
+  "failed_count": 0,
+  "summaries": [
+    {
+      "pub_id": "3b697fec797867d8d303806918788e2b3d8c4d5df19ab14a17e54fc4655d05c5",
+      "title": "Identification of a Novel miRNA Expression Signature for Lung Adenocarcinoma Using Systematic Machine Learning Optimization",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.10.698764v1?rss=1",
+      "why_it_matters": "Identifying a novel miRNA expression signature could enhance early detection of lung adenocarcinoma, potentially leading to improved patient outcomes through timely intervention.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint, and without access to the full text, the findings and their implications for early detection remain unclear."
+    },
+    {
+      "pub_id": "07df7989a548f17bb77fa24d5104627e3b7fe1036efd888c37e7c97239a642ce",
+      "title": "Multimodal AI for Single cfDNA Profiling and Cancer Screening",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2025-12-30T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2025.12.29.696856v1?rss=1",
+      "why_it_matters": "This study explores the use of multimodal AI for profiling circulating free DNA (cfDNA), which could enhance early cancer detection by improving the accuracy and efficiency of screening methods.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The lack of detailed findings limits the ability to assess the strength of the evidence."
+    },
+    {
+      "pub_id": "1eb34aa44c04994c045a903b1a566f831b44396dc6c40f247e4a432fc566ff56",
+      "title": "Performance of an artificial intelligence-based tool for cervical precancer screening in five countries in Africa: a prospective, observational, diagnostic accuracy study",
+      "source": "The Lancet",
+      "venue": "",
+      "published_date": "2026-01-01T00:00:00",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/41386246/",
+      "why_it_matters": "This study evaluates an AI-based tool for cervical precancer screening, which is crucial for early detection and prevention of cervical cancer, particularly in resource-limited settings.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "prospective",
+      "evidence_strength": "medium",
+      "evidence_rationale": "The study's prospective design suggests a systematic approach to evaluating the AI tool, but limited information restricts a full assessment of its findings."
+    },
+    {
+      "pub_id": "cdf25770466d14f50ad8c27992e0ef192f29a81688d1fac44f5207a6e26792fb",
+      "title": "Volatile Organic Compounds Analysis as a Potential Novel Screening Tool for Breast Cancer: A Systematic Review",
+      "source": "LLM-Expansion",
+      "venue": "",
+      "published_date": "2026-01-10T16:31:16.795010",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/35645556/",
+      "why_it_matters": "The analysis of volatile organic compounds (VOCs) presents a non-invasive method for early breast cancer detection, potentially improving screening accessibility and outcomes.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "review",
+      "evidence_strength": "medium",
+      "evidence_rationale": "The review suggests potential but lacks extensive clinical validation and large-scale studies to confirm efficacy."
+    },
+    {
+      "pub_id": "9fd2b2ca1dd234c4990f1203eb5cf9df97abf842be624ab4d4c3a1352e1c95f0",
+      "title": "Serum cytokeratin 19 fragment antigen 21-1 as a diagnostic and prognostic biomarker for thymic carcinoma in thymic masses",
+      "source": "European Journal of Cardio-Thoracic Surgery",
+      "venue": "",
+      "published_date": "2026-01-09T00:00:00",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/41512303/",
+      "why_it_matters": "Identifying reliable biomarkers like serum cytokeratin 19 fragment antigen 21-1 can enhance early detection of thymic carcinoma, potentially leading to improved patient outcomes.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "other",
+      "evidence_strength": "low",
+      "evidence_rationale": "Limited information available to assess the strength of evidence."
+    },
+    {
+      "pub_id": "bd8eb813dbd9f3543586d57c13380ed9fad5ae30e9933109386f6b5dd60ecf90",
+      "title": "Interface-Resolved Proteomics of Cell-Cell Membranes Reveals Early Spatial Polarity in a Vertebrate Embryo",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.10.698819v1?rss=1",
+      "why_it_matters": "Understanding early spatial polarity in cell membranes may provide insights into the mechanisms of tumorigenesis, potentially leading to novel early detection strategies for cancer.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their implications for early cancer detection."
+    },
+    {
+      "pub_id": "dd535346f9b9c2f860f0b5314db70fe1f006442007647357fb41cde4adf177fb",
+      "title": "MMP-9 as a diagnostic salivary biomarker for early detection of oral cancers: systematic review and meta-analysis",
+      "source": "PubMed - cancer (broad)",
+      "venue": "",
+      "published_date": "2026-01-03T00:00:00",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/41484977/",
+      "why_it_matters": "Early detection of oral cancers is crucial for improving treatment outcomes and survival rates. Identifying reliable biomarkers like MMP-9 can facilitate non-invasive screening methods.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "review",
+      "evidence_strength": "medium",
+      "evidence_rationale": "The systematic review and meta-analysis suggest potential utility of MMP-9 as a biomarker, but further studies are needed to confirm its diagnostic accuracy."
+    },
+    {
+      "pub_id": "1285017bf1e018a6f2fb663386f9f1f94bc9e66b0ba35c0e59bec00484c34364",
+      "title": "Cost-effective early detection of banana bunchy top disease: insights from spatio-temporal modelling in Benin",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.09.698707v1?rss=1",
+      "why_it_matters": "Understanding cost-effective early detection methods in agriculture can provide insights into similar strategies for early cancer detection, emphasizing the importance of timely intervention.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "51f58ea115ff617d9e8c091d69259e79b20b930cb5eb67118634e9fe37b2b57f",
+      "title": "Slow breathing impacts inter-organ dynamics modulating brain function and risk behavior",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.09.698695v1?rss=1",
+      "why_it_matters": "Understanding how slow breathing affects brain function and risk behavior may provide insights into behavioral changes that could influence early cancer detection and screening adherence.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "0deeae273d982629e8ee56198199f736c96e86b44b510527ec98fc25a0125ee5",
+      "title": "XAI-ecDNA: A Proof-of-Concept Framework for Explainable Multi-Modal Extrachromosomal DNA Detection Using Synthetic FISH and Genomics",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-04T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.04.697565v1?rss=1",
+      "why_it_matters": "This framework aims to enhance the detection of extrachromosomal DNA, which is associated with cancer, potentially leading to earlier diagnosis and improved patient outcomes.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint, and detailed findings are not provided, limiting the assessment of evidence strength."
+    },
+    {
+      "pub_id": "ad73a0faf73def4dec7a18075d8d0717eaa92b78ada46d87ee4df966dd15d88a",
+      "title": "Synchrony is a robust iEEG biomarker for antiseizure medication load in epileptic patients",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.09.698669v1?rss=1",
+      "why_it_matters": "Understanding biomarkers like Synchrony can enhance the precision of monitoring neurological conditions, which may have implications for identifying early signs of related health issues, including cancer.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "766812b207038f364adb111e5b1c3bcacbed3b68005bb55a3aad68491efcdd16",
+      "title": "Epigenetic Crosstalk Between BCG-Infected Macrophages and Naive Monocytes Potentiates Antimycobacterial Activity",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.12.698601v1?rss=1",
+      "why_it_matters": "Understanding the immune response mechanisms can enhance early detection strategies for cancer, as similar pathways may be involved in tumor immunity.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "feafba0ddce4d948988d608ede175cde4bc6958a9adaa886805f172bc3bf68ed",
+      "title": "Development of Integrin \u03b15\u03b21-targeted PET/NIR imaging probes for glioblastoma intraoperative navigation and intracavity targeted radionuclide therapy",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.09.698741v1?rss=1",
+      "why_it_matters": "The development of targeted imaging probes can enhance the precision of glioblastoma detection and treatment during surgery, potentially leading to improved outcomes in early cancer intervention.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint, and specific findings are not available for evaluation."
+    },
+    {
+      "pub_id": "824a70666db873d8e80e0efad2e98e02718f791cbbfc3367bab18d03e1a43676",
+      "title": "A Wearable Infrared Sensor for Detecting Non-ST Segment Elevation Acute Coronary Syndromes",
+      "source": "medRxiv (all)",
+      "venue": "medRxiv",
+      "published_date": "2025-12-30T00:00:00",
+      "url": "https://www.medrxiv.org/content/10.64898/2025.12.24.25342991v1?rss=1",
+      "why_it_matters": "Wearable sensors for early detection of health conditions can potentially be adapted for cancer screening, improving patient outcomes through timely intervention.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "7782404e0e6519517aad23a29d26ec03521b2bb5b8cd0ae4fb6f425172a91de9",
+      "title": "Hypothalamic CYP46A1 cholesterol metabolism regulates diet-induced obesity",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.10.698773v1?rss=1",
+      "why_it_matters": "Understanding the role of cholesterol metabolism in obesity may provide insights into metabolic pathways that contribute to cancer development, potentially aiding in early detection strategies.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "3d9d088e8f5af84ac12ac34949d20a6f6f7636100cc18975776ad6575f17886b",
+      "title": "Transcriptome profiling to identify blood biomarkers for peritoneal endometriosis",
+      "source": "medRxiv (all)",
+      "venue": "medRxiv",
+      "published_date": "2025-12-30T00:00:00",
+      "url": "https://www.medrxiv.org/content/10.64898/2025.12.23.25342915v1?rss=1",
+      "why_it_matters": "Identifying blood biomarkers for peritoneal endometriosis can enhance early detection strategies, potentially leading to earlier diagnosis of associated cancers.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the robustness of findings."
+    },
+    {
+      "pub_id": "0a31623ed0c035f449d0718ac4fb708f665328aa25b21615ac8eebcc8a138301",
+      "title": "Predictability of Sleep Slow Oscillation Emergence and Spatial Extent from Pre-Onset Neural Dynamics",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.09.698723v1?rss=1",
+      "why_it_matters": "Understanding neural dynamics and their predictability may provide insights into physiological changes that precede cancer onset, potentially aiding in early detection strategies.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "2a793477df84306d39705e20b59988656e58ade84d6976d29b84ddd4d1c1fcb5",
+      "title": "Burden of Fecal Colonization with Extended-Spectrum Beta-Lactamase Producing Enterobacteriaceae among Food handlers in Africa: A Systematic review and meta-analysis",
+      "source": "medRxiv (all)",
+      "venue": "medRxiv",
+      "published_date": "2025-12-30T00:00:00",
+      "url": "https://www.medrxiv.org/content/10.64898/2025.12.30.25343138v1?rss=1",
+      "why_it_matters": "Understanding the burden of fecal colonization with antibiotic-resistant bacteria among food handlers can inform public health strategies that may indirectly impact cancer screening and prevention efforts, particularly in vulnerable populations.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with limited information available, which may affect the reliability of the findings."
+    },
+    {
+      "pub_id": "d9771b535a7310960e68081d102c328d979f64fbf9aad72e1b703371ad6dd499",
+      "title": "Identifying risk individuals for heart failure diagnosis within two years in the adult population in southern Sweden using gender, age, multimorbidity level, and socioeconomic status",
+      "source": "medRxiv (all)",
+      "venue": "medRxiv",
+      "published_date": "2025-12-30T00:00:00",
+      "url": "https://www.medrxiv.org/content/10.64898/2025.12.29.25343158v1?rss=1",
+      "why_it_matters": "Understanding risk factors for heart failure can inform early detection strategies that may also be applicable to cancer screening, as both conditions share common risk factors such as age and multimorbidity.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "Limited information available prevents a thorough evaluation of the study's findings and their implications for early cancer detection."
+    },
+    {
+      "pub_id": "6386fd4d04b4d112bb8beba6efc116d1cac1227b8958e6bbc93130d317b0f179",
+      "title": "The global Dx AMR collaborative: an approach to strengthen the role of diagnostics in combating antimicrobial resistance",
+      "source": "The Lancet",
+      "venue": "",
+      "published_date": "2026-01-10T00:00:00",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/41521107/",
+      "why_it_matters": "Strengthening diagnostics can enhance early detection of infections that may lead to cancer, particularly in immunocompromised patients.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "other",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication lacks detailed findings to assess the strength of evidence regarding early cancer detection."
+    }
+  ]
+}

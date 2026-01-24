@@ -1,0 +1,310 @@
+{
+  "generated_at": "2026-01-12T22:29:14.989594",
+  "summary_version": "v1",
+  "total_count": 20,
+  "cached_count": 12,
+  "generated_count": 8,
+  "failed_count": 0,
+  "summaries": [
+    {
+      "pub_id": "3b697fec797867d8d303806918788e2b3d8c4d5df19ab14a17e54fc4655d05c5",
+      "title": "Identification of a Novel miRNA Expression Signature for Lung Adenocarcinoma Using Systematic Machine Learning Optimization",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.10.698764v1?rss=1",
+      "why_it_matters": "Identifying a novel miRNA expression signature could enhance early detection of lung adenocarcinoma, potentially leading to improved patient outcomes through timely intervention.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint, and without access to the full text, the findings and their implications for early detection remain unclear."
+    },
+    {
+      "pub_id": "cdf25770466d14f50ad8c27992e0ef192f29a81688d1fac44f5207a6e26792fb",
+      "title": "Volatile Organic Compounds Analysis as a Potential Novel Screening Tool for Breast Cancer: A Systematic Review",
+      "source": "LLM-Expansion",
+      "venue": "",
+      "published_date": "2026-01-10T16:31:16.795010",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/35645556/",
+      "why_it_matters": "The analysis of volatile organic compounds (VOCs) presents a non-invasive method for early breast cancer detection, potentially improving screening accessibility and outcomes.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "review",
+      "evidence_strength": "medium",
+      "evidence_rationale": "The review suggests potential but lacks extensive clinical validation and large-scale studies to confirm efficacy."
+    },
+    {
+      "pub_id": "9fd2b2ca1dd234c4990f1203eb5cf9df97abf842be624ab4d4c3a1352e1c95f0",
+      "title": "Serum cytokeratin 19 fragment antigen 21-1 as a diagnostic and prognostic biomarker for thymic carcinoma in thymic masses",
+      "source": "European Journal of Cardio-Thoracic Surgery",
+      "venue": "",
+      "published_date": "2026-01-09T00:00:00",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/41512303/",
+      "why_it_matters": "Identifying reliable biomarkers like serum cytokeratin 19 fragment antigen 21-1 can enhance early detection of thymic carcinoma, potentially leading to improved patient outcomes.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "other",
+      "evidence_strength": "low",
+      "evidence_rationale": "Limited information available to assess the strength of evidence."
+    },
+    {
+      "pub_id": "6aa065984a1b87bfd8d318e5a3b8eab1ea752485639d8eacfc6f8207121ae544",
+      "title": "Whole-genome profiling of native 5-hydroxymethylation in human neurons with long-read sequencing",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.11.695537v1?rss=1",
+      "why_it_matters": "Understanding 5-hydroxymethylation in neurons may provide insights into epigenetic changes associated with cancer, potentially aiding in the development of early detection biomarkers.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "bd8eb813dbd9f3543586d57c13380ed9fad5ae30e9933109386f6b5dd60ecf90",
+      "title": "Interface-Resolved Proteomics of Cell-Cell Membranes Reveals Early Spatial Polarity in a Vertebrate Embryo",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.10.698819v1?rss=1",
+      "why_it_matters": "Understanding early spatial polarity in cell membranes may provide insights into the mechanisms of tumorigenesis, potentially leading to novel early detection strategies for cancer.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their implications for early cancer detection."
+    },
+    {
+      "pub_id": "cc3afa84d6471572156fb9eea265ad1e2c80eeedff26d84905cf06cacda036e7",
+      "title": "Cell type-specific proximity labeling of organ secretomes reveals energy balance-dependent proteomic remodeling.",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.11.698831v1?rss=1",
+      "why_it_matters": "Understanding the proteomic changes in organ secretomes can provide insights into metabolic alterations associated with cancer, potentially aiding in the identification of early biomarkers for detection.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "1285017bf1e018a6f2fb663386f9f1f94bc9e66b0ba35c0e59bec00484c34364",
+      "title": "Cost-effective early detection of banana bunchy top disease: insights from spatio-temporal modelling in Benin",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.09.698707v1?rss=1",
+      "why_it_matters": "Understanding cost-effective early detection methods in agriculture can provide insights into similar strategies for early cancer detection, emphasizing the importance of timely intervention.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "94ceb5fdec3a1d589b7f6cee98e71644f3deb59da91968d2109a7912b5797566",
+      "title": "Strain-specific response to pharmacological cold mimicking in aging mice",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-09T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.08.698532v1?rss=1",
+      "why_it_matters": "Understanding strain-specific responses to pharmacological interventions in aging mice may provide insights into biological mechanisms that could be targeted for early cancer detection and prevention strategies.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The lack of available text limits the ability to assess the robustness and relevance of findings to early cancer detection."
+    },
+    {
+      "pub_id": "580722543cf2f8ff2be7897bfd550e9e524cc5d63d1c3e2e8179842151ca2d70",
+      "title": "Type I and III interferons synergize with TNF to promote virally-triggered damage to the intestinal epithelium",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.10.698817v1?rss=1",
+      "why_it_matters": "Understanding the role of interferons and TNF in intestinal damage may provide insights into early biomarkers for cancer associated with viral infections.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their implications for early cancer detection."
+    },
+    {
+      "pub_id": "51f58ea115ff617d9e8c091d69259e79b20b930cb5eb67118634e9fe37b2b57f",
+      "title": "Slow breathing impacts inter-organ dynamics modulating brain function and risk behavior",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.09.698695v1?rss=1",
+      "why_it_matters": "Understanding how slow breathing affects brain function and risk behavior may provide insights into behavioral changes that could influence early cancer detection and screening adherence.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "91ecf08e846a942b4c765964416808636021c272cb93f4d415dd12c198a50f1a",
+      "title": "Iterative engineering of a compact Cas9 ortholog for in vivo gene editing via single AAV delivery",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.12.698990v1?rss=1",
+      "why_it_matters": "The development of a compact Cas9 ortholog for gene editing could enhance the precision and efficiency of genetic modifications, potentially leading to improved early detection methods for cancer through targeted therapies.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their implications for early cancer detection."
+    },
+    {
+      "pub_id": "ad73a0faf73def4dec7a18075d8d0717eaa92b78ada46d87ee4df966dd15d88a",
+      "title": "Synchrony is a robust iEEG biomarker for antiseizure medication load in epileptic patients",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.09.698669v1?rss=1",
+      "why_it_matters": "Understanding biomarkers like Synchrony can enhance the precision of monitoring neurological conditions, which may have implications for identifying early signs of related health issues, including cancer.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "308caf406a12908fa999dc4116c74e1b166afd29264202cd2e1f177b83aef231",
+      "title": "Establishing label-free quantitative X-ray dose-response profiling by Holo-Tomographic Flow Cytometry",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.12.699031v1?rss=1",
+      "why_it_matters": "This study introduces a novel method for X-ray dose-response profiling, which could enhance the detection of cellular responses to radiation, potentially aiding in the early identification of cancerous changes.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the robustness of findings."
+    },
+    {
+      "pub_id": "766812b207038f364adb111e5b1c3bcacbed3b68005bb55a3aad68491efcdd16",
+      "title": "Epigenetic Crosstalk Between BCG-Infected Macrophages and Naive Monocytes Potentiates Antimycobacterial Activity",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.12.698601v1?rss=1",
+      "why_it_matters": "Understanding the immune response mechanisms can enhance early detection strategies for cancer, as similar pathways may be involved in tumor immunity.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "feafba0ddce4d948988d608ede175cde4bc6958a9adaa886805f172bc3bf68ed",
+      "title": "Development of Integrin \u03b15\u03b21-targeted PET/NIR imaging probes for glioblastoma intraoperative navigation and intracavity targeted radionuclide therapy",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.09.698741v1?rss=1",
+      "why_it_matters": "The development of targeted imaging probes can enhance the precision of glioblastoma detection and treatment during surgery, potentially leading to improved outcomes in early cancer intervention.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint, and specific findings are not available for evaluation."
+    },
+    {
+      "pub_id": "8392d711ae8e97a26828a53f29ba1e8cbc70751cbf8dfade0ceeb2d7fd245413",
+      "title": "Stress-responsive roles of the C. neoformans human-like eIF3 complex",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.12.698982v1?rss=1",
+      "why_it_matters": "Understanding the stress-responsive roles of the eIF3 complex in C. neoformans may provide insights into cellular mechanisms that could be targeted for early cancer detection strategies.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "Limited information available prevents a thorough assessment of findings and their implications for early cancer detection."
+    },
+    {
+      "pub_id": "7782404e0e6519517aad23a29d26ec03521b2bb5b8cd0ae4fb6f425172a91de9",
+      "title": "Hypothalamic CYP46A1 cholesterol metabolism regulates diet-induced obesity",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.10.698773v1?rss=1",
+      "why_it_matters": "Understanding the role of cholesterol metabolism in obesity may provide insights into metabolic pathways that contribute to cancer development, potentially aiding in early detection strategies.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "e142850aac2281f7e276672b850e56d56077bdebfe48edb19b223a146c85e412",
+      "title": "Loss of contractile pericytes and their impaired calcium dynamics exacerbate brain ischemic stroke of awake mice in acute and chronic phases",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.11.698861v1?rss=1",
+      "why_it_matters": "Understanding the mechanisms of ischemic stroke and pericyte function may provide insights into tumor microenvironment interactions, potentially aiding in early cancer detection strategies.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "0a31623ed0c035f449d0718ac4fb708f665328aa25b21615ac8eebcc8a138301",
+      "title": "Predictability of Sleep Slow Oscillation Emergence and Spatial Extent from Pre-Onset Neural Dynamics",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.09.698723v1?rss=1",
+      "why_it_matters": "Understanding neural dynamics and their predictability may provide insights into physiological changes that precede cancer onset, potentially aiding in early detection strategies.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no available text, limiting the ability to assess the findings and their relevance to early cancer detection."
+    },
+    {
+      "pub_id": "8cc99b48effbc5f5ed4ec265ace6847a8a175988a4d458b6d3bd66a9d86c1b46",
+      "title": "EOLA1, a novel mitochondria-localized protein critical for heart functions via regulating mitochondrial translation",
+      "source": "bioRxiv (all)",
+      "venue": "bioRxiv",
+      "published_date": "2026-01-12T00:00:00",
+      "url": "https://www.biorxiv.org/content/10.64898/2026.01.12.699056v1?rss=1",
+      "why_it_matters": "Understanding mitochondrial functions and their regulation may provide insights into cancer metabolism, potentially aiding in early detection strategies.",
+      "key_findings": [
+        "Limited information available"
+      ],
+      "study_type": "preprint",
+      "evidence_strength": "low",
+      "evidence_rationale": "The publication is a preprint with no detailed findings available for evaluation."
+    }
+  ]
+}

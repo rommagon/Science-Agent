@@ -1,0 +1,28 @@
+{
+  "run_id": "tri-model-daily-2026-01-12",
+  "run_type": "tri-model-daily",
+  "mode": "tri-model-daily",
+  "generated_at": "2026-01-22T17:09:46.493710",
+  "window_start": "2026-01-10T00:00:00",
+  "window_end": "2026-01-12T00:00:00",
+  "window_mode": "midnight_anchored",
+  "counts": {
+    "raw_fetched": 955,
+    "window_filtered": 76,
+    "deduplicated": 71,
+    "usable": 50,
+    "missing_abstract": 0,
+    "reviewer_failures": 0,
+    "gpt_evaluations": 50
+  },
+  "reviewers_used": [
+    "claude",
+    "gemini"
+  ],
+  "local_output_paths": {
+    "tri_model_events": "data/outputs/tri-model-daily/tri-model-daily-2026-01-12/tri_model_events.jsonl",
+    "must_reads": "data/outputs/tri-model-daily/tri-model-daily-2026-01-12/must_reads.json",
+    "report": "data/outputs/tri-model-daily/tri-model-daily-2026-01-12/report.md",
+    "manifest": "data/outputs/tri-model-daily/tri-model-daily-2026-01-12/manifest.json"
+  }
+}

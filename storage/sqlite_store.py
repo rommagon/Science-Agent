@@ -10,7 +10,7 @@ If the database fails, the pipeline continues normally with a warning.
 import logging
 import sqlite3
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Dict
 
 from acitrack_types import Publication
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_PATH = "data/db/acitrack.db"
 
 # Schema version for future migrations
-SCHEMA_VERSION = 5  # Bumped for must-reads rerank cache + expansion fields
+SCHEMA_VERSION = 7  # Bumped for tri_model_scoring_events table
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
@@ -108,6 +108,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         cursor.execute("INSERT INTO schema_version (version) VALUES (5)")
         current_version = 5
 
+    if current_version < 6:
+        logger.info("Migrating schema from version %d to 6", current_version)
+        _migrate_to_v6(cursor)
+        cursor.execute("INSERT INTO schema_version (version) VALUES (6)")
+        current_version = 6
+
+    if current_version < 7:
+        logger.info("Migrating schema from version %d to 7", current_version)
+        _migrate_to_v7(cursor)
+        cursor.execute("INSERT INTO schema_version (version) VALUES (7)")
+        current_version = 7
+
     conn.commit()
     logger.info("Database schema initialized (version %d)", current_version)
 
@@ -191,13 +203,14 @@ def _migrate_to_v3(cursor: sqlite3.Cursor) -> None:
             llm_rank INTEGER,
             llm_reason TEXT,
             llm_why TEXT,
-            llm_findings TEXT,
+            input_fingerprint TEXT,
+            response_json TEXT,
             PRIMARY KEY (pub_id, rerank_version)
         )
     """)
 
     cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_rerank_cache_created_at
+        CREATE INDEX IF NOT EXISTS idx_must_reads_rerank_cache_created_at
         ON must_reads_rerank_cache(created_at)
     """)
 
@@ -207,64 +220,186 @@ def _migrate_to_v3(cursor: sqlite3.Cursor) -> None:
 def _migrate_to_v4(cursor: sqlite3.Cursor) -> None:
     """Migrate database schema to version 4.
 
-    Adds must-reads summary cache table for LLM-generated summaries.
+    Adds bibliometric enrichment columns to publications table.
 
     Args:
         cursor: Database cursor
     """
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS must_reads_summary_cache (
-            pub_id TEXT NOT NULL,
-            summary_version TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            model TEXT,
-            why_it_matters TEXT,
-            key_findings TEXT,
-            study_type TEXT,
-            evidence_strength TEXT,
-            evidence_rationale TEXT,
-            PRIMARY KEY (pub_id, summary_version)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_summary_cache_created_at
-        ON must_reads_summary_cache(created_at)
-    """)
-
-    logger.info("Schema migrated to version 4: added must_reads_summary_cache table")
-
-
-def _migrate_to_v5(cursor: sqlite3.Cursor) -> None:
-    """Migrate database schema to version 5.
-
-    Adds expansion and scoring fields to publications.
-
-    Args:
-        cursor: Database cursor
-    """
+    # Add new columns for bibliometric data
     new_columns = [
         ("doi", "TEXT"),
-        ("relevance_score", "INTEGER DEFAULT 0"),
-        ("credibility_score", "INTEGER DEFAULT 0"),
-        ("main_interesting_fact", "TEXT"),
-        ("relevance_to_spotitearly", "TEXT"),
-        ("modality_tags", "TEXT"),  # JSON array
-        ("sample_size", "INTEGER"),
-        ("study_type", "TEXT"),
-        ("key_metrics", "TEXT"),  # JSON dict
-        ("sponsor_flag", "INTEGER DEFAULT 0"),
+        ("citation_count", "INTEGER"),
+        ("citations_per_year", "REAL"),
+        ("venue_name", "TEXT"),
+        ("pub_type", "TEXT"),
     ]
 
     for col_name, col_type in new_columns:
         try:
             cursor.execute(f"ALTER TABLE publications ADD COLUMN {col_name} {col_type}")
-            logger.info("Added column: %s", col_name)
+            logger.info("Added column '%s' to publications table", col_name)
         except sqlite3.OperationalError as e:
-            # Column might already exist (or older SQLite limitations)
-            logger.debug("Column %s: %s", col_name, e)
+            if "duplicate column name" in str(e).lower():
+                logger.debug("Column '%s' already exists, skipping", col_name)
+            else:
+                raise
 
-    logger.info("Schema migrated to version 5: added expansion and scoring fields")
+    logger.info("Schema migrated to version 4: added bibliometric columns")
+
+
+def _migrate_to_v5(cursor: sqlite3.Cursor) -> None:
+    """Migrate database schema to version 5.
+
+    Adds enrichment columns to publications table.
+
+    Args:
+        cursor: Database cursor
+    """
+    # Add enrichment columns
+    enrichment_columns = [
+        ("relevance_score", "INTEGER"),
+        ("credibility_score", "INTEGER"),
+        ("main_interesting_fact", "TEXT"),
+        ("relevance_to_spotitearly", "TEXT"),
+        ("modality_tags", "TEXT"),
+        ("sample_size", "TEXT"),
+        ("study_type", "TEXT"),
+        ("key_metrics", "TEXT"),
+        ("sponsor_flag", "TEXT"),
+    ]
+
+    for col_name, col_type in enrichment_columns:
+        try:
+            cursor.execute(f"ALTER TABLE publications ADD COLUMN {col_name} {col_type}")
+            logger.info("Added column '%s' to publications table", col_name)
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower():
+                logger.debug("Column '%s' already exists, skipping", col_name)
+            else:
+                raise
+
+    logger.info("Schema migrated to version 5: added enrichment columns")
+
+
+def _migrate_to_v6(cursor: sqlite3.Cursor) -> None:
+    """Migrate database schema to version 6.
+
+    Adds relevancy scoring events table.
+
+    Args:
+        cursor: Database cursor
+    """
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS relevancy_scoring_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            publication_id TEXT NOT NULL,
+            source TEXT,
+            prompt_version TEXT NOT NULL,
+            model TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            relevancy_score INTEGER,
+            relevancy_reason TEXT,
+            confidence TEXT,
+            signals_json TEXT,
+            input_fingerprint TEXT,
+            raw_response_json TEXT,
+            latency_ms INTEGER,
+            cost_usd REAL,
+            UNIQUE(run_id, publication_id, prompt_version)
+        )
+    """)
+
+    # Indexes for common queries
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_relevancy_events_run_id
+        ON relevancy_scoring_events(run_id)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_relevancy_events_pub_id
+        ON relevancy_scoring_events(publication_id)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_relevancy_events_created_at
+        ON relevancy_scoring_events(created_at)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_relevancy_events_mode
+        ON relevancy_scoring_events(mode)
+    """)
+
+    logger.info("Schema migrated to version 6: added relevancy_scoring_events table")
+
+
+def _migrate_to_v7(cursor: sqlite3.Cursor) -> None:
+    """Migrate database schema to version 7.
+
+    Adds tri-model scoring events table.
+
+    Args:
+        cursor: Database cursor
+    """
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tri_model_scoring_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            publication_id TEXT NOT NULL,
+            title TEXT,
+            source TEXT,
+            published_date TEXT,
+            claude_review_json TEXT,
+            gemini_review_json TEXT,
+            gpt_eval_json TEXT,
+            final_relevancy_score INTEGER,
+            final_relevancy_reason TEXT,
+            final_signals_json TEXT,
+            final_summary TEXT,
+            agreement_level TEXT,
+            disagreements TEXT,
+            evaluator_rationale TEXT,
+            confidence TEXT,
+            prompt_versions_json TEXT,
+            model_names_json TEXT,
+            claude_latency_ms INTEGER,
+            gemini_latency_ms INTEGER,
+            gpt_latency_ms INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(run_id, publication_id)
+        )
+    """)
+
+    # Indexes for common queries
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tri_model_events_run_id
+        ON tri_model_scoring_events(run_id)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tri_model_events_pub_id
+        ON tri_model_scoring_events(publication_id)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tri_model_events_created_at
+        ON tri_model_scoring_events(created_at)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tri_model_events_mode
+        ON tri_model_scoring_events(mode)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tri_model_events_score
+        ON tri_model_scoring_events(final_relevancy_score)
+    """)
+
+    logger.info("Schema migrated to version 7: added tri_model_scoring_events table")
 
 
 def _get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -390,108 +525,59 @@ def store_publications(
         }
 
     except Exception as e:
-        logger.warning("Failed to store publications to database: %s", e)
+        logger.error("Failed to store publications: %s", e)
         return {
             "success": False,
-            "total": len(publications),
+            "total": len(publications) if publications else 0,
             "inserted": 0,
             "duplicates": 0,
             "error": str(e),
         }
 
 
-def get_publication_count(db_path: str = DEFAULT_DB_PATH) -> int:
-    """Get total number of publications in the database.
-
-    Args:
-        db_path: Path to database file
-
-    Returns:
-        Total count of publications, or -1 if query fails
-    """
-    try:
-        conn = _get_connection(db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM publications")
-        count = cursor.fetchone()[0]
-        conn.close()
-        return count
-    except Exception as e:
-        logger.warning("Failed to get publication count: %s", e)
-        return -1
-
-
-def get_source_stats(db_path: str = DEFAULT_DB_PATH) -> List[dict]:
-    """Get publication counts by source.
-
-    Args:
-        db_path: Path to database file
-
-    Returns:
-        List of dicts with 'source' and 'count' keys, or empty list if query fails
-    """
-    try:
-        conn = _get_connection(db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT source, COUNT(*) as count
-            FROM publications
-            GROUP BY source
-            ORDER BY count DESC
-        """)
-        results = [{"source": row[0], "count": row[1]} for row in cursor.fetchall()]
-        conn.close()
-        return results
-    except Exception as e:
-        logger.warning("Failed to get source stats: %s", e)
-        return []
-
-
 def store_run_history(
     run_id: str,
     started_at: str,
     since_timestamp: str,
-    max_items_per_source: int,
     sources_count: int,
     total_fetched: int,
     total_deduped: int,
     new_count: int,
     unchanged_count: int,
     summarized_count: int,
-    upload_drive: bool,
-    publications_with_status: list,
+    max_items_per_source: Optional[int] = None,
+    upload_drive: bool = False,
     db_path: str = DEFAULT_DB_PATH,
 ) -> dict:
-    """Store run history and per-run publication tracking.
-
-    This function stores metadata about a pipeline run and tracks which
-    publications were seen in that run with their status (new/unchanged).
+    """Store run history metadata.
 
     Args:
-        run_id: Unique run identifier
-        started_at: Run start timestamp (ISO format)
-        since_timestamp: Since timestamp for fetching (ISO format)
-        max_items_per_source: Max items per source setting
+        run_id: Run identifier
+        started_at: Run start timestamp
+        since_timestamp: Lookback timestamp
         sources_count: Number of sources processed
-        total_fetched: Total publications fetched (before dedup)
-        total_deduped: Total publications after deduplication
+        total_fetched: Total publications fetched
+        total_deduped: Total after deduplication
         new_count: Count of new publications
         unchanged_count: Count of unchanged publications
-        summarized_count: Count of publications summarized
+        summarized_count: Count of summarized publications
+        max_items_per_source: Max items per source (optional)
         upload_drive: Whether Drive upload was enabled
-        publications_with_status: List of dicts with 'id', 'status', 'source', 'date'
         db_path: Path to database file
 
     Returns:
-        Dictionary with storage statistics
+        Dictionary with storage result:
+        {
+            "success": bool,
+            "error": str or None
+        }
     """
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
 
-        # Insert run metadata
         cursor.execute("""
-            INSERT INTO runs (
+            INSERT OR REPLACE INTO runs (
                 run_id, started_at, since_timestamp, max_items_per_source,
                 sources_count, total_fetched, total_deduped, new_count,
                 unchanged_count, summarized_count, upload_drive
@@ -510,56 +596,25 @@ def store_run_history(
             1 if upload_drive else 0,
         ))
 
-        # Insert pub_runs entries
-        pub_runs_inserted = 0
-        for pub in publications_with_status:
-            try:
-                cursor.execute("""
-                    INSERT OR IGNORE INTO pub_runs (
-                        run_id, pub_id, status, source, published_date
-                    ) VALUES (?, ?, ?, ?, ?)
-                """, (
-                    run_id,
-                    pub.get("id", ""),
-                    pub.get("status", ""),
-                    pub.get("source", ""),
-                    pub.get("date", ""),
-                ))
-                if cursor.rowcount > 0:
-                    pub_runs_inserted += 1
-            except sqlite3.Error as e:
-                logger.debug("Failed to insert pub_run for %s: %s", pub.get("id", ""), e)
-                continue
-
         conn.commit()
         conn.close()
 
-        logger.info(
-            "Stored run history: run_id=%s, new=%d, unchanged=%d, pub_runs=%d",
-            run_id,
-            new_count,
-            unchanged_count,
-            pub_runs_inserted,
-        )
+        logger.info("Stored run history for run_id=%s", run_id)
 
         return {
             "success": True,
-            "run_id": run_id,
-            "pub_runs_inserted": pub_runs_inserted,
             "error": None,
         }
 
     except Exception as e:
-        logger.warning("Failed to store run history: %s", e)
+        logger.warning("Failed to store run history: %s (non-blocking)", e)
         return {
             "success": False,
-            "run_id": run_id,
-            "pub_runs_inserted": 0,
             "error": str(e),
         }
 
 
-def get_run_history(limit: int = 10, db_path: str = DEFAULT_DB_PATH) -> List[dict]:
+def get_run_history(limit: int = 10, db_path: str = DEFAULT_DB_PATH) -> list:
     """Get recent run history.
 
     Args:
@@ -604,3 +659,442 @@ def get_run_history(limit: int = 10, db_path: str = DEFAULT_DB_PATH) -> List[dic
     except Exception as e:
         logger.warning("Failed to get run history: %s", e)
         return []
+
+
+def store_relevancy_scoring_event(
+    run_id: str,
+    mode: str,
+    publication_id: str,
+    source: str,
+    prompt_version: str,
+    model: str,
+    relevancy_score: Optional[int],
+    relevancy_reason: Optional[str],
+    confidence: Optional[str],
+    signals: Optional[Dict],
+    input_fingerprint: Optional[str],
+    raw_response: Optional[Dict],
+    latency_ms: Optional[int],
+    cost_usd: Optional[float],
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict:
+    """Store a relevancy scoring event.
+
+    Args:
+        run_id: Run identifier
+        mode: Run mode (daily, weekly, etc.)
+        publication_id: Publication ID
+        source: Source name
+        prompt_version: Prompt version used
+        model: Model name used
+        relevancy_score: Relevancy score (0-100)
+        relevancy_reason: Reason for score
+        confidence: Confidence level
+        signals: Extracted signals dict
+        input_fingerprint: Hash of input
+        raw_response: Raw API response
+        latency_ms: Latency in milliseconds
+        cost_usd: Cost in USD
+        db_path: Path to database file
+
+    Returns:
+        Dictionary with storage result
+    """
+    import json
+
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        signals_json = json.dumps(signals) if signals else None
+        raw_response_json = json.dumps(raw_response) if raw_response else None
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO relevancy_scoring_events (
+                run_id, mode, publication_id, source, prompt_version, model,
+                relevancy_score, relevancy_reason, confidence, signals_json,
+                input_fingerprint, raw_response_json, latency_ms, cost_usd
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            run_id,
+            mode,
+            publication_id,
+            source,
+            prompt_version,
+            model,
+            relevancy_score,
+            relevancy_reason,
+            confidence,
+            signals_json,
+            input_fingerprint,
+            raw_response_json,
+            latency_ms,
+            cost_usd,
+        ))
+
+        conn.commit()
+        conn.close()
+
+        logger.debug(
+            "Stored relevancy event: run_id=%s, pub_id=%s, score=%s",
+            run_id,
+            publication_id[:16],
+            relevancy_score,
+        )
+
+        return {
+            "success": True,
+            "error": None,
+        }
+
+    except Exception as e:
+        logger.warning("Failed to store relevancy event: %s", e)
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+def get_relevancy_scores_for_run(
+    run_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Dict[str, Dict]:
+    """Get all relevancy scores for a run.
+
+    Args:
+        run_id: Run identifier
+        db_path: Path to database file
+
+    Returns:
+        Dictionary mapping publication_id to score data
+    """
+    import json
+
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                publication_id, relevancy_score, relevancy_reason, confidence,
+                signals_json, prompt_version, model, created_at
+            FROM relevancy_scoring_events
+            WHERE run_id = ?
+            ORDER BY created_at ASC
+        """, (run_id,))
+
+        results = {}
+        for row in cursor.fetchall():
+            pub_id = row[0]
+            signals = json.loads(row[4]) if row[4] else {}
+
+            results[pub_id] = {
+                "relevancy_score": row[1],
+                "relevancy_reason": row[2],
+                "confidence": row[3],
+                "signals": signals,
+                "prompt_version": row[5],
+                "model": row[6],
+                "created_at": row[7],
+            }
+
+        conn.close()
+        logger.debug("Retrieved %d relevancy scores for run_id=%s", len(results), run_id)
+        return results
+
+    except Exception as e:
+        logger.warning("Failed to get relevancy scores for run %s: %s", run_id, e)
+        return {}
+
+
+def export_relevancy_events_to_jsonl(
+    run_id: str,
+    output_path: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict:
+    """Export relevancy scoring events for a run to JSONL file.
+
+    Args:
+        run_id: Run identifier to export
+        output_path: Path to output JSONL file
+        db_path: Path to database file
+
+    Returns:
+        Dictionary with export statistics:
+        {
+            "success": bool,
+            "events_exported": int,
+            "output_path": str,
+            "error": str or None
+        }
+    """
+    import json
+
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                run_id, mode, publication_id, source, prompt_version, model,
+                created_at, relevancy_score, relevancy_reason, confidence,
+                signals_json, input_fingerprint, latency_ms, cost_usd
+            FROM relevancy_scoring_events
+            WHERE run_id = ?
+            ORDER BY created_at ASC
+        """, (run_id,))
+
+        # Ensure output directory exists
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        events_exported = 0
+        with open(output_path, "w", encoding="utf-8") as f:
+            for row in cursor.fetchall():
+                event = {
+                    "run_id": row[0],
+                    "mode": row[1],
+                    "publication_id": row[2],
+                    "source": row[3],
+                    "prompt_version": row[4],
+                    "model": row[5],
+                    "created_at": row[6],
+                    "relevancy_score": row[7],
+                    "relevancy_reason": row[8],
+                    "confidence": row[9],
+                    "signals": json.loads(row[10]) if row[10] else {},
+                    "input_fingerprint": row[11],
+                    "latency_ms": row[12],
+                    "cost_usd": row[13],
+                }
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+                events_exported += 1
+
+        conn.close()
+
+        logger.info("Exported %d relevancy events to %s", events_exported, output_path)
+
+        return {
+            "success": True,
+            "events_exported": events_exported,
+            "output_path": output_path,
+            "error": None,
+        }
+
+    except Exception as e:
+        logger.warning("Failed to export relevancy events: %s", e)
+        return {
+            "success": False,
+            "events_exported": 0,
+            "output_path": output_path,
+            "error": str(e),
+        }
+
+
+def store_tri_model_scoring_event(
+    run_id: str,
+    mode: str,
+    publication_id: str,
+    title: str,
+    source: str,
+    published_date: Optional[str],
+    claude_review: Optional[Dict],
+    gemini_review: Optional[Dict],
+    gpt_eval: Optional[Dict],
+    final_relevancy_score: int,
+    final_relevancy_reason: str,
+    final_signals: Dict,
+    final_summary: str,
+    agreement_level: str,
+    disagreements: str,
+    evaluator_rationale: str,
+    confidence: str,
+    prompt_versions: Dict,
+    model_names: Dict,
+    claude_latency_ms: Optional[int],
+    gemini_latency_ms: Optional[int],
+    gpt_latency_ms: Optional[int],
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict:
+    """Store a tri-model scoring event.
+
+    Args:
+        run_id: Run identifier
+        mode: Run mode (tri-model-daily, etc.)
+        publication_id: Publication ID
+        title: Publication title
+        source: Source name
+        published_date: Publication date
+        claude_review: Claude review dict or None
+        gemini_review: Gemini review dict or None
+        gpt_eval: GPT evaluation dict or None
+        final_relevancy_score: Final score (0-100)
+        final_relevancy_reason: Final reason
+        final_signals: Final signals dict
+        final_summary: Final summary
+        agreement_level: Agreement level (high/moderate/low)
+        disagreements: Disagreements text
+        evaluator_rationale: Evaluator rationale
+        confidence: Confidence level
+        prompt_versions: Prompt versions dict
+        model_names: Model names dict
+        claude_latency_ms: Claude latency
+        gemini_latency_ms: Gemini latency
+        gpt_latency_ms: GPT latency
+        db_path: Path to database file
+
+    Returns:
+        Dictionary with storage result
+    """
+    import json
+
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO tri_model_scoring_events (
+                run_id, mode, publication_id, title, source, published_date,
+                claude_review_json, gemini_review_json, gpt_eval_json,
+                final_relevancy_score, final_relevancy_reason, final_signals_json,
+                final_summary, agreement_level, disagreements, evaluator_rationale,
+                confidence, prompt_versions_json, model_names_json,
+                claude_latency_ms, gemini_latency_ms, gpt_latency_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            run_id,
+            mode,
+            publication_id,
+            title,
+            source,
+            published_date,
+            json.dumps(claude_review) if claude_review else None,
+            json.dumps(gemini_review) if gemini_review else None,
+            json.dumps(gpt_eval) if gpt_eval else None,
+            final_relevancy_score,
+            final_relevancy_reason,
+            json.dumps(final_signals),
+            final_summary,
+            agreement_level,
+            disagreements,
+            evaluator_rationale,
+            confidence,
+            json.dumps(prompt_versions),
+            json.dumps(model_names),
+            claude_latency_ms,
+            gemini_latency_ms,
+            gpt_latency_ms,
+        ))
+
+        conn.commit()
+        conn.close()
+
+        logger.debug(
+            "Stored tri-model event: run_id=%s, pub_id=%s, score=%s",
+            run_id,
+            publication_id[:16],
+            final_relevancy_score,
+        )
+
+        return {
+            "success": True,
+            "error": None,
+        }
+
+    except Exception as e:
+        logger.warning("Failed to store tri-model event: %s", e)
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+def export_tri_model_events_to_jsonl(
+    run_id: str,
+    output_path: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict:
+    """Export tri-model scoring events for a run to JSONL file.
+
+    Args:
+        run_id: Run identifier to export
+        output_path: Path to output JSONL file
+        db_path: Path to database file
+
+    Returns:
+        Dictionary with export statistics
+    """
+    import json
+
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                run_id, mode, publication_id, title, source, published_date,
+                claude_review_json, gemini_review_json, gpt_eval_json,
+                final_relevancy_score, final_relevancy_reason, final_signals_json,
+                final_summary, agreement_level, disagreements, evaluator_rationale,
+                confidence, prompt_versions_json, model_names_json,
+                claude_latency_ms, gemini_latency_ms, gpt_latency_ms,
+                created_at
+            FROM tri_model_scoring_events
+            WHERE run_id = ?
+            ORDER BY created_at ASC
+        """, (run_id,))
+
+        # Ensure output directory exists
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        events_exported = 0
+        with open(output_path, "w", encoding="utf-8") as f:
+            for row in cursor.fetchall():
+                event = {
+                    "run_id": row[0],
+                    "mode": row[1],
+                    "publication_id": row[2],
+                    "title": row[3],
+                    "source": row[4],
+                    "published_date": row[5],
+                    "claude_review": json.loads(row[6]) if row[6] else None,
+                    "gemini_review": json.loads(row[7]) if row[7] else None,
+                    "gpt_eval": json.loads(row[8]) if row[8] else None,
+                    "final_relevancy_score": row[9],
+                    "final_relevancy_reason": row[10],
+                    "final_signals": json.loads(row[11]) if row[11] else {},
+                    "final_summary": row[12],
+                    "agreement_level": row[13],
+                    "disagreements": row[14],
+                    "evaluator_rationale": row[15],
+                    "confidence": row[16],
+                    "prompt_versions": json.loads(row[17]) if row[17] else {},
+                    "model_names": json.loads(row[18]) if row[18] else {},
+                    "claude_latency_ms": row[19],
+                    "gemini_latency_ms": row[20],
+                    "gpt_latency_ms": row[21],
+                    "created_at": row[22],
+                }
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+                events_exported += 1
+
+        conn.close()
+
+        logger.info("Exported %d tri-model events to %s", events_exported, output_path)
+
+        return {
+            "success": True,
+            "events_exported": events_exported,
+            "output_path": output_path,
+            "error": None,
+        }
+
+    except Exception as e:
+        logger.warning("Failed to export tri-model events: %s", e)
+        return {
+            "success": False,
+            "events_exported": 0,
+            "output_path": output_path,
+            "error": str(e),
+        }

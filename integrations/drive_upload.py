@@ -391,6 +391,7 @@ def upload_run_outputs(
             ("report.md", run_output_dir / "report.md", "report"),
             ("new.csv", run_output_dir / "new.csv", "new"),
             ("summaries.json", run_output_dir / "summaries.json", "summaries"),
+            ("relevancy_events.jsonl", run_output_dir / "relevancy_events.jsonl", "relevancy_events"),
         ]
 
         results = {}

@@ -1,0 +1,116 @@
+name: Tri-Model Daily Run
+
+on:
+  schedule:
+    # Run daily at 1:00 PM UTC (5am PST / 8am EST)
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+    inputs:
+      max_papers:
+        description: 'Maximum papers to review'
+        required: false
+        default: '50'
+        type: string
+      lookback_hours:
+        description: 'Lookback window in hours'
+        required: false
+        default: '48'
+        type: string
+      ingest:
+        description: 'Ingest to backend'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  tri-model-daily-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install anthropic google-generativeai
+
+      - name: Run tri-model daily
+        env:
+          TRI_MODEL_MINI_DAILY: 'true'
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SPOTITEARLY_LLM_API_KEY: ${{ secrets.SPOTITEARLY_LLM_API_KEY }}
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          BACKEND_API_KEY: ${{ secrets.BACKEND_API_KEY }}
+        run: |
+          # Construct command with dynamic flags
+          CMD="python3 -u run_tri_model_daily.py"
+          CMD="$CMD --max-papers ${{ inputs.max_papers || '50' }}"
+          CMD="$CMD --lookback-hours ${{ inputs.lookback_hours || '48' }}"
+
+          # Add backend ingestion flag if enabled (default true for scheduled runs)
+          if [ "${{ inputs.ingest }}" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
+            CMD="$CMD --ingest-backend --ingest-strict"
+          fi
+
+          echo "Executing: $CMD"
+          $CMD
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tri-model-daily-outputs-${{ github.run_id }}
+          path: |
+            data/outputs/tri-model-daily/
+            data/manifests/tri-model-daily/
+          retention-days: 30
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "## Tri-Model Daily Run Complete ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Get latest run directory
+          RUN_ID=$(ls -t data/outputs/tri-model-daily/ | head -1)
+          echo "**Run ID:** $RUN_ID" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Show counts from manifest
+          if [ -f "data/outputs/tri-model-daily/$RUN_ID/manifest.json" ]; then
+            CANDIDATES=$(jq '.counts.usable' "data/outputs/tri-model-daily/$RUN_ID/manifest.json")
+            GPT_EVALS=$(jq '.counts.gpt_evaluations' "data/outputs/tri-model-daily/$RUN_ID/manifest.json")
+            echo "**Candidates Reviewed:** $CANDIDATES" >> $GITHUB_STEP_SUMMARY
+            echo "**Evaluations Complete:** $GPT_EVALS" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Show must-reads count
+          if [ -f "data/outputs/tri-model-daily/$RUN_ID/must_reads.json" ]; then
+            MUST_READS_COUNT=$(jq '.must_reads | length' "data/outputs/tri-model-daily/$RUN_ID/must_reads.json")
+            echo "**Must-Reads Generated:** $MUST_READS_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Show backend ingestion status
+          if [ "${{ inputs.ingest }}" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "**Backend Ingestion:** ✓ Complete" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Backend Ingestion:** Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Failure notification
+        if: failure()
+        run: |
+          echo "## Tri-Model Daily Run Failed ❌" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the workflow logs for details." >> $GITHUB_STEP_SUMMARY

@@ -12,13 +12,19 @@ Environment variables:
 - SPOTITEARLY_LLM_MODEL: Model name (default: gpt-4o-mini)
 """
 
+import hashlib
 import json
 import logging
 import os
-from typing import Dict, Optional
+import time
+from typing import Dict, Optional, Tuple
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# Module-level cache for scoring results within a run
+# Key: (run_id, publication_id) -> scoring result dict
+_RUN_CACHE: Dict[Tuple[str, str], Dict] = {}
 
 # Version identifier for this scoring implementation
 SCORING_VERSION = "poc_v2"
@@ -79,6 +85,57 @@ OUTPUT FORMAT (strict JSON):
 }}
 
 Respond ONLY with valid JSON. Do not include markdown formatting or explanations outside the JSON object."""
+
+
+def _compute_input_fingerprint(title: str, abstract: str) -> str:
+    """Compute a stable hash of the input for deduplication.
+
+    Args:
+        title: Publication title
+        abstract: Abstract text
+
+    Returns:
+        SHA256 hex digest of normalized input
+    """
+    normalized = f"{title.strip().lower()}||{abstract.strip().lower()}"
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def init_run_cache(run_id: str, db_path: str = "data/db/acitrack.db") -> int:
+    """Initialize the run cache by loading existing scores from database.
+
+    Args:
+        run_id: Run identifier to load scores for
+        db_path: Path to database file
+
+    Returns:
+        Number of scores loaded from database
+    """
+    global _RUN_CACHE
+
+    try:
+        from storage.sqlite_store import get_relevancy_scores_for_run
+
+        scores = get_relevancy_scores_for_run(run_id, db_path)
+
+        # Populate cache
+        for pub_id, result in scores.items():
+            cache_key = (run_id, pub_id)
+            _RUN_CACHE[cache_key] = result
+
+        logger.info("Loaded %d relevancy scores from DB for run_id=%s", len(scores), run_id)
+        return len(scores)
+
+    except Exception as e:
+        logger.warning("Failed to initialize run cache: %s", e)
+        return 0
+
+
+def clear_run_cache() -> None:
+    """Clear the run cache (useful for testing)."""
+    global _RUN_CACHE
+    _RUN_CACHE.clear()
+    logger.debug("Cleared relevancy scoring run cache")
 
 
 def _get_api_key() -> Optional[str]:
@@ -205,16 +262,27 @@ def _parse_llm_response(response_text: str) -> Optional[Dict]:
         return None
 
 
-def score_relevancy(item: Dict) -> Dict:
+def score_relevancy(
+    item: Dict,
+    run_id: Optional[str] = None,
+    mode: Optional[str] = None,
+    store_to_db: bool = True,
+    db_path: str = "data/db/acitrack.db",
+) -> Dict:
     """Score relevancy of a must-reads item using LLM.
 
     Args:
         item: Must-reads item dictionary with fields:
+            - id (required for caching)
             - title (required)
             - raw_text or summary (for abstract)
             - source (optional)
             - relevancy_score (optional, for caching check)
             - scoring_version (optional, for caching check)
+        run_id: Optional run identifier for caching (e.g., "daily-2026-01-20")
+        mode: Optional run mode ("daily" or "weekly") for DB storage
+        store_to_db: Whether to store result to database (default: True)
+        db_path: Path to database file
 
     Returns:
         Dictionary with keys:
@@ -227,11 +295,22 @@ def score_relevancy(item: Dict) -> Dict:
             - scoring_model: model name used
             - error: optional error message if scoring failed
     """
-    # Check cache: if already scored with poc_v2 and has valid score, return cached
+    global _RUN_CACHE
+
+    pub_id = item.get("id", "")
+
+    # Check run cache first (highest priority)
+    if run_id and pub_id:
+        cache_key = (run_id, pub_id)
+        if cache_key in _RUN_CACHE:
+            logger.debug("Using run cache for pub_id=%s", pub_id)
+            return _RUN_CACHE[cache_key]
+
+    # Check item cache: if already scored with poc_v2 and has valid score, return cached
     if (item.get("scoring_version") == SCORING_VERSION and
         item.get("relevancy_score") is not None):
-        logger.info("Using cached relevancy score for item: %s", item.get("id", "unknown"))
-        return {
+        logger.debug("Using item cache for pub_id=%s", pub_id)
+        result = {
             "relevancy_score": item["relevancy_score"],
             "relevancy_reason": item.get("relevancy_reason", ""),
             "confidence": item.get("confidence", "medium"),
@@ -240,6 +319,12 @@ def score_relevancy(item: Dict) -> Dict:
             "scoring_version": SCORING_VERSION,
             "scoring_model": item.get("scoring_model", "cached"),
         }
+
+        # Store to run cache if run_id provided
+        if run_id and pub_id:
+            _RUN_CACHE[(run_id, pub_id)] = result
+
+        return result
 
     # Get API key
     api_key = _get_api_key()
@@ -287,6 +372,8 @@ def score_relevancy(item: Dict) -> Dict:
     # Call LLM with retry logic
     max_retries = 2
     parsed_result = None
+    start_time = time.time()
+    raw_response_text = None
 
     for attempt in range(max_retries):
         logger.info("Scoring relevancy (attempt %d/%d) for: %s", attempt + 1, max_retries, title[:80])
@@ -296,6 +383,7 @@ def score_relevancy(item: Dict) -> Dict:
             logger.warning("LLM call failed on attempt %d", attempt + 1)
             continue
 
+        raw_response_text = response_text
         parsed_result = _parse_llm_response(response_text)
         if parsed_result:
             logger.info("Successfully scored item: %s (score=%d)",
@@ -305,9 +393,15 @@ def score_relevancy(item: Dict) -> Dict:
             logger.warning("Failed to parse LLM response on attempt %d: %s",
                           attempt + 1, response_text[:200])
 
-    # Return result or fallback
+    # Calculate latency
+    latency_ms = int((time.time() - start_time) * 1000)
+
+    # Compute input fingerprint
+    input_fingerprint = _compute_input_fingerprint(title, abstract)
+
+    # Build result
     if parsed_result:
-        return {
+        result = {
             "relevancy_score": parsed_result["relevancy_score"],
             "relevancy_reason": parsed_result["relevancy_reason"],
             "confidence": parsed_result["confidence"],
@@ -318,7 +412,7 @@ def score_relevancy(item: Dict) -> Dict:
         }
     else:
         logger.error("Failed to score item after %d attempts: %s", max_retries, title[:80])
-        return {
+        result = {
             "relevancy_score": None,
             "relevancy_reason": "",
             "confidence": "low",
@@ -329,13 +423,55 @@ def score_relevancy(item: Dict) -> Dict:
             "error": "LLM scoring failed after retries"
         }
 
+    # Store to database if requested
+    if store_to_db and run_id and pub_id and mode:
+        try:
+            from storage.sqlite_store import store_relevancy_scoring_event
 
-def batch_score_relevancy(items: list[Dict], use_cache: bool = True) -> list[Dict]:
+            store_relevancy_scoring_event(
+                run_id=run_id,
+                mode=mode,
+                publication_id=pub_id,
+                source=source,
+                prompt_version=SCORING_VERSION,
+                model=model,
+                relevancy_score=result["relevancy_score"],
+                relevancy_reason=result["relevancy_reason"],
+                confidence=result["confidence"],
+                signals=result["signals"],
+                input_fingerprint=input_fingerprint,
+                raw_response={"text": raw_response_text} if raw_response_text else None,
+                latency_ms=latency_ms,
+                cost_usd=None,  # TODO: track cost if available
+                db_path=db_path,
+            )
+        except Exception as e:
+            logger.warning("Failed to store relevancy event to DB: %s", e)
+
+    # Store to run cache if run_id provided
+    if run_id and pub_id:
+        _RUN_CACHE[(run_id, pub_id)] = result
+
+    return result
+
+
+def batch_score_relevancy(
+    items: list,
+    use_cache: bool = True,
+    run_id: Optional[str] = None,
+    mode: Optional[str] = None,
+    store_to_db: bool = True,
+    db_path: str = "data/db/acitrack.db",
+) -> list:
     """Score relevancy for a batch of items.
 
     Args:
         items: List of must-reads item dictionaries
         use_cache: Whether to use cached scores (default: True)
+        run_id: Optional run identifier for caching
+        mode: Optional run mode for DB storage
+        store_to_db: Whether to store results to database
+        db_path: Path to database file
 
     Returns:
         List of scoring results (same order as input)
@@ -343,29 +479,28 @@ def batch_score_relevancy(items: list[Dict], use_cache: bool = True) -> list[Dic
     results = []
 
     for item in items:
-        # Optionally skip cached items
-        if (not use_cache or
-            item.get("scoring_version") != SCORING_VERSION or
-            item.get("relevancy_score") is None):
-            result = score_relevancy(item)
-        else:
-            # Return cached result
-            result = {
-                "relevancy_score": item["relevancy_score"],
-                "relevancy_reason": item.get("relevancy_reason", ""),
-                "confidence": item.get("confidence", "medium"),
-                "signals": item.get("signals", {}),
-                "scored_at": item.get("scored_at", datetime.now().isoformat()),
-                "scoring_version": SCORING_VERSION,
-                "scoring_model": item.get("scoring_model", "cached"),
-            }
-
+        result = score_relevancy(
+            item,
+            run_id=run_id,
+            mode=mode,
+            store_to_db=store_to_db,
+            db_path=db_path,
+        )
         results.append(result)
 
     return results
 
 
-def compute_relevancy_score(title: str, abstract: str, source: str = "") -> Dict:
+def compute_relevancy_score(
+    title: str,
+    abstract: str,
+    source: str = "",
+    pub_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    mode: Optional[str] = None,
+    store_to_db: bool = True,
+    db_path: str = "data/db/acitrack.db",
+) -> Dict:
     """Compute relevancy score for a publication (wrapper for backward compatibility).
 
     This function provides a simplified interface compatible with the scoring.relevance
@@ -375,6 +510,11 @@ def compute_relevancy_score(title: str, abstract: str, source: str = "") -> Dict
         title: Publication title
         abstract: Abstract or summary text
         source: Source name (optional)
+        pub_id: Publication ID (optional, for caching)
+        run_id: Run identifier (optional, for caching)
+        mode: Run mode (optional, for DB storage)
+        store_to_db: Whether to store to database
+        db_path: Path to database file
 
     Returns:
         Dictionary with keys:
@@ -385,12 +525,19 @@ def compute_relevancy_score(title: str, abstract: str, source: str = "") -> Dict
     """
     # Build item dict for score_relevancy
     item = {
+        "id": pub_id,
         "title": title,
         "raw_text": abstract,
         "summary": abstract,
         "source": source,
     }
 
-    result = score_relevancy(item)
+    result = score_relevancy(
+        item,
+        run_id=run_id,
+        mode=mode,
+        store_to_db=store_to_db,
+        db_path=db_path,
+    )
 
     return result

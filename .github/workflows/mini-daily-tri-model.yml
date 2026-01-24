@@ -1,0 +1,86 @@
+name: Mini-Daily Tri-Model Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      lookback_hours:
+        description: 'Lookback window in hours'
+        required: false
+        default: '6'
+        type: string
+      max_papers:
+        description: 'Maximum papers to review'
+        required: false
+        default: '10'
+        type: string
+      upload_drive:
+        description: 'Upload to Google Drive'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  mini-daily-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: feature/tri-model-mini-daily
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install anthropic google-generativeai
+
+      - name: Run mini-daily tri-model
+        env:
+          TRI_MODEL_MINI_DAILY: 'true'
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SPOTITEARLY_LLM_API_KEY: ${{ secrets.SPOTITEARLY_LLM_API_KEY }}
+          ACITRACK_DRIVE_FOLDER_ID: ${{ secrets.ACITRACK_DRIVE_FOLDER_ID }}
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+        run: |
+          # Write Google credentials to file
+          echo "$GOOGLE_APPLICATION_CREDENTIALS_JSON" > /tmp/google_creds.json
+          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/google_creds.json
+
+          # Run mini-daily
+          python run_mini_daily.py \
+            --lookback-hours ${{ inputs.lookback_hours }} \
+            --max-papers ${{ inputs.max_papers }} \
+            ${{ inputs.upload_drive && '--upload-drive' || '' }}
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mini-daily-outputs-${{ github.run_id }}
+          path: |
+            data/outputs/mini-daily/
+            data/manifests/mini-daily/
+          retention-days: 30
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "## Mini-Daily Tri-Model Run Complete ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          RUN_ID=$(ls -t data/outputs/mini-daily/ | head -1)
+          echo "**Run ID:** $RUN_ID" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Show must-reads count if file exists
+          if [ -f "data/outputs/mini-daily/$RUN_ID/must_reads.json" ]; then
+            MUST_READS_COUNT=$(jq '.must_reads | length' "data/outputs/mini-daily/$RUN_ID/must_reads.json")
+            echo "**Must-Reads Generated:** $MUST_READS_COUNT" >> $GITHUB_STEP_SUMMARY
+          fi
