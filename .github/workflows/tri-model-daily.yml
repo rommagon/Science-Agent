@@ -2,8 +2,14 @@ name: Tri-Model Daily Run
 
 on:
   schedule:
-    # Run daily at 1:00 PM UTC (5am PST / 8am EST)
+    # Run daily at 3:45 PM UTC (7:45am PST / 10:45am EST)
     - cron: '45 15 * * *'
+  # Keep-alive: prevent GitHub from auto-disabling this workflow after 60 days of inactivity
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/tri-model-daily.yml'
   workflow_dispatch:
     inputs:
       max_papers:
