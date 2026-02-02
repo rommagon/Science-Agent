@@ -4,6 +4,9 @@ data/summaries/*.json
 # Keep snapshot state for change detection across runs
 # data/snapshots/*.json  # DISABLED - we need to track latest.json
 data/output/*.md
+data/outputs/
+data/manifests/
+scoring_eval_data/clean/
 data/db/*.db
 data/db/*.db-journal
 
