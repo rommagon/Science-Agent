@@ -1,0 +1,32 @@
+[
+  {
+    "type": "pmid",
+    "value": "39385123",
+    "comment": "Example PMID - will be resolved via NCBI E-utilities"
+  },
+  {
+    "type": "doi",
+    "value": "10.1038/s41586-024-07051-0",
+    "comment": "Example DOI - will be resolved via Crossref API"
+  },
+  {
+    "type": "url",
+    "value": "https://www.nature.com/articles/s41586-024-07051-0",
+    "comment": "URL with embedded DOI - DOI will be extracted and resolved"
+  },
+  {
+    "type": "url",
+    "value": "https://pubmed.ncbi.nlm.nih.gov/39385123/",
+    "comment": "PubMed URL - PMID will be extracted and resolved"
+  },
+  {
+    "type": "url",
+    "value": "https://www.biorxiv.org/content/10.1101/2024.01.15.575123v1",
+    "comment": "bioRxiv preprint URL - DOI will be extracted"
+  },
+  {
+    "type": "url",
+    "value": "https://www.medrxiv.org/content/10.1101/2024.02.20.24303012v1",
+    "comment": "medRxiv preprint URL - DOI will be extracted"
+  }
+]

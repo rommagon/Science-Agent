@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_PATH = "data/db/acitrack.db"
 
 # Schema version for future migrations
-SCHEMA_VERSION = 7  # Bumped for tri_model_scoring_events table
+SCHEMA_VERSION = 8  # Bumped for canonical_url, source_type, pmid columns and publication_embeddings table
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
@@ -120,8 +120,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         cursor.execute("INSERT INTO schema_version (version) VALUES (7)")
         current_version = 7
 
+    if current_version < 8:
+        logger.info("Migrating schema from version %d to 8", current_version)
+        _migrate_to_v8(cursor)
+        cursor.execute("INSERT INTO schema_version (version) VALUES (8)")
+        current_version = 8
+
     # Ensure credibility columns exist (idempotent check run on every init)
     _ensure_tri_model_credibility_columns(cursor)
+
+    # Ensure canonical URL and embedding columns/tables exist (idempotent)
+    _ensure_canonical_url_columns(cursor)
+    _ensure_publication_embeddings_table(cursor)
 
     conn.commit()
     logger.info("Database schema initialized (version %d)", current_version)
@@ -407,6 +417,165 @@ def _migrate_to_v7(cursor: sqlite3.Cursor) -> None:
     """)
 
     logger.info("Schema migrated to version 7: added tri_model_scoring_events table")
+
+
+def _migrate_to_v8(cursor: sqlite3.Cursor) -> None:
+    """Migrate database schema to version 8.
+
+    Adds canonical_url, source_type, pmid columns to publications table
+    and creates publication_embeddings table for semantic search.
+
+    Args:
+        cursor: Database cursor
+    """
+    # Add new columns to publications table
+    new_columns = [
+        ("canonical_url", "TEXT"),
+        ("source_type", "TEXT"),  # pubmed, rss, biorxiv, medrxiv, arxiv, etc.
+        ("pmid", "TEXT"),
+    ]
+
+    for col_name, col_type in new_columns:
+        try:
+            cursor.execute(f"ALTER TABLE publications ADD COLUMN {col_name} {col_type}")
+            logger.info("Added column '%s' to publications table", col_name)
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower():
+                logger.debug("Column '%s' already exists, skipping", col_name)
+            else:
+                raise
+
+    # Create index on canonical_url
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_publications_canonical_url
+        ON publications(canonical_url)
+    """)
+
+    # Create index on pmid
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_publications_pmid
+        ON publications(pmid)
+    """)
+
+    # Create publication_embeddings table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS publication_embeddings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            publication_id TEXT NOT NULL,
+            embedding_model TEXT NOT NULL,
+            embedding_dim INTEGER NOT NULL,
+            embedding BLOB NOT NULL,
+            content_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(publication_id, embedding_model, content_hash),
+            FOREIGN KEY (publication_id) REFERENCES publications(id)
+        )
+    """)
+
+    # Create indexes for publication_embeddings
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pub_embeddings_publication_id
+        ON publication_embeddings(publication_id)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pub_embeddings_content_hash
+        ON publication_embeddings(content_hash)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pub_embeddings_model
+        ON publication_embeddings(embedding_model)
+    """)
+
+    logger.info("Schema migrated to version 8: added canonical_url, source_type, pmid columns and publication_embeddings table")
+
+
+def _ensure_canonical_url_columns(cursor: sqlite3.Cursor) -> None:
+    """Ensure publications table has canonical_url, source_type, and pmid columns.
+
+    This is called on every initialization to handle cases where the columns
+    were not added during migration.
+
+    Args:
+        cursor: Database cursor
+    """
+    try:
+        cursor.execute("PRAGMA table_info(publications)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        # Add missing columns
+        canonical_columns = [
+            ("canonical_url", "TEXT"),
+            ("source_type", "TEXT"),
+            ("pmid", "TEXT"),
+        ]
+
+        for col_name, col_type in canonical_columns:
+            if col_name not in columns:
+                cursor.execute(f"ALTER TABLE publications ADD COLUMN {col_name} {col_type}")
+                logger.info("Added %s column to publications", col_name)
+
+        # Ensure indexes exist
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_publications_canonical_url
+            ON publications(canonical_url)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_publications_pmid
+            ON publications(pmid)
+        """)
+
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e).lower():
+            logger.debug("publications table doesn't exist yet, will be created by migration")
+        else:
+            logger.warning("Error ensuring canonical URL columns: %s", e)
+    except Exception as e:
+        logger.warning("Unexpected error ensuring canonical URL columns: %s", e)
+
+
+def _ensure_publication_embeddings_table(cursor: sqlite3.Cursor) -> None:
+    """Ensure publication_embeddings table exists with proper schema.
+
+    This is called on every initialization to handle cases where the table
+    was not created during migration.
+
+    Args:
+        cursor: Database cursor
+    """
+    try:
+        # Create table if not exists
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS publication_embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                publication_id TEXT NOT NULL,
+                embedding_model TEXT NOT NULL,
+                embedding_dim INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                content_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(publication_id, embedding_model, content_hash),
+                FOREIGN KEY (publication_id) REFERENCES publications(id)
+            )
+        """)
+
+        # Ensure indexes exist
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pub_embeddings_publication_id
+            ON publication_embeddings(publication_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pub_embeddings_content_hash
+            ON publication_embeddings(content_hash)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pub_embeddings_model
+            ON publication_embeddings(embedding_model)
+        """)
+
+    except Exception as e:
+        logger.warning("Error ensuring publication_embeddings table: %s", e)
 
 
 def _ensure_tri_model_credibility_columns(cursor: sqlite3.Cursor) -> None:
@@ -1172,3 +1341,478 @@ def export_tri_model_events_to_jsonl(
             "output_path": output_path,
             "error": str(e),
         }
+
+
+def update_publication_canonical_url(
+    publication_id: str,
+    canonical_url: Optional[str],
+    doi: Optional[str] = None,
+    pmid: Optional[str] = None,
+    source_type: Optional[str] = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict:
+    """Update a publication's canonical URL and related fields.
+
+    Args:
+        publication_id: Publication ID
+        canonical_url: Canonical URL to set
+        doi: DOI to set (optional)
+        pmid: PMID to set (optional)
+        source_type: Source type to set (optional)
+        db_path: Path to database file
+
+    Returns:
+        Dictionary with update result
+    """
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        # Build dynamic UPDATE statement
+        fields = []
+        values = []
+
+        if canonical_url is not None:
+            fields.append("canonical_url = ?")
+            values.append(canonical_url)
+
+        if doi is not None:
+            fields.append("doi = ?")
+            values.append(doi)
+
+        if pmid is not None:
+            fields.append("pmid = ?")
+            values.append(pmid)
+
+        if source_type is not None:
+            fields.append("source_type = ?")
+            values.append(source_type)
+
+        if not fields:
+            return {"success": True, "updated": False, "error": None}
+
+        values.append(publication_id)
+
+        cursor.execute(
+            f"UPDATE publications SET {', '.join(fields)} WHERE id = ?",
+            values
+        )
+
+        updated = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        return {
+            "success": True,
+            "updated": updated,
+            "error": None,
+        }
+
+    except Exception as e:
+        logger.warning("Failed to update publication canonical URL: %s", e)
+        return {
+            "success": False,
+            "updated": False,
+            "error": str(e),
+        }
+
+
+def get_publications_missing_canonical_url(
+    since_days: Optional[int] = None,
+    limit: Optional[int] = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> List[Dict]:
+    """Get publications that don't have a canonical URL.
+
+    Args:
+        since_days: Only get publications from the last N days (optional)
+        limit: Maximum number of publications to return (optional)
+        db_path: Path to database file
+
+    Returns:
+        List of publication dictionaries
+    """
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT id, title, url, doi, pmid, source, source_type, published_date, raw_text
+            FROM publications
+            WHERE canonical_url IS NULL OR canonical_url = ''
+        """
+        params = []
+
+        if since_days is not None:
+            query += " AND created_at >= datetime('now', ?)"
+            params.append(f'-{since_days} days')
+
+        query += " ORDER BY created_at DESC"
+
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        cursor.execute(query, params)
+
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "id": row[0],
+                "title": row[1],
+                "url": row[2],
+                "doi": row[3],
+                "pmid": row[4],
+                "source": row[5],
+                "source_type": row[6],
+                "published_date": row[7],
+                "raw_text": row[8],
+            })
+
+        conn.close()
+        return results
+
+    except Exception as e:
+        logger.warning("Failed to get publications missing canonical URL: %s", e)
+        return []
+
+
+def get_publication_by_id(
+    publication_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[Dict]:
+    """Get a single publication by ID.
+
+    Args:
+        publication_id: Publication ID
+        db_path: Path to database file
+
+    Returns:
+        Publication dictionary or None
+    """
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, title, authors, source, venue, published_date, url, raw_text,
+                   summary, doi, pmid, canonical_url, source_type
+            FROM publications
+            WHERE id = ?
+        """, (publication_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        return {
+            "id": row[0],
+            "title": row[1],
+            "authors": row[2],
+            "source": row[3],
+            "venue": row[4],
+            "published_date": row[5],
+            "url": row[6],
+            "raw_text": row[7],
+            "summary": row[8],
+            "doi": row[9],
+            "pmid": row[10],
+            "canonical_url": row[11],
+            "source_type": row[12],
+        }
+
+    except Exception as e:
+        logger.warning("Failed to get publication by ID: %s", e)
+        return None
+
+
+def store_publication_embedding(
+    publication_id: str,
+    embedding_model: str,
+    embedding_dim: int,
+    embedding: bytes,
+    content_hash: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict:
+    """Store an embedding for a publication.
+
+    Args:
+        publication_id: Publication ID
+        embedding_model: Name of the embedding model used
+        embedding_dim: Dimension of the embedding vector
+        embedding: Embedding bytes (numpy array as bytes)
+        content_hash: SHA256 hash of the input text
+        db_path: Path to database file
+
+    Returns:
+        Dictionary with storage result
+    """
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO publication_embeddings (
+                publication_id, embedding_model, embedding_dim, embedding, content_hash
+            ) VALUES (?, ?, ?, ?, ?)
+        """, (
+            publication_id,
+            embedding_model,
+            embedding_dim,
+            embedding,
+            content_hash,
+        ))
+
+        conn.commit()
+        conn.close()
+
+        logger.debug(
+            "Stored embedding for publication %s (model=%s, dim=%d)",
+            publication_id[:16],
+            embedding_model,
+            embedding_dim,
+        )
+
+        return {
+            "success": True,
+            "error": None,
+        }
+
+    except Exception as e:
+        logger.warning("Failed to store embedding: %s", e)
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+def get_publication_embedding(
+    publication_id: str,
+    embedding_model: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[Dict]:
+    """Get an embedding for a publication.
+
+    Args:
+        publication_id: Publication ID
+        embedding_model: Name of the embedding model
+        db_path: Path to database file
+
+    Returns:
+        Dictionary with embedding data or None
+    """
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT embedding, embedding_dim, content_hash, created_at
+            FROM publication_embeddings
+            WHERE publication_id = ? AND embedding_model = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (publication_id, embedding_model))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        return {
+            "embedding": row[0],
+            "embedding_dim": row[1],
+            "content_hash": row[2],
+            "created_at": row[3],
+        }
+
+    except Exception as e:
+        logger.warning("Failed to get embedding: %s", e)
+        return None
+
+
+def get_publications_missing_embeddings(
+    embedding_model: str,
+    since_days: Optional[int] = None,
+    limit: Optional[int] = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> List[Dict]:
+    """Get publications that don't have an embedding for the given model.
+
+    Args:
+        embedding_model: Name of the embedding model
+        since_days: Only get publications from the last N days (optional)
+        limit: Maximum number of publications to return (optional)
+        db_path: Path to database file
+
+    Returns:
+        List of publication dictionaries
+    """
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT p.id, p.title, p.raw_text, p.summary, p.source, p.venue, p.published_date
+            FROM publications p
+            LEFT JOIN publication_embeddings pe
+                ON p.id = pe.publication_id AND pe.embedding_model = ?
+            WHERE pe.id IS NULL
+        """
+        params = [embedding_model]
+
+        if since_days is not None:
+            query += " AND p.created_at >= datetime('now', ?)"
+            params.append(f'-{since_days} days')
+
+        query += " ORDER BY p.created_at DESC"
+
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        cursor.execute(query, params)
+
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "id": row[0],
+                "title": row[1],
+                "raw_text": row[2],
+                "summary": row[3],
+                "source": row[4],
+                "venue": row[5],
+                "published_date": row[6],
+            })
+
+        conn.close()
+        return results
+
+    except Exception as e:
+        logger.warning("Failed to get publications missing embeddings: %s", e)
+        return []
+
+
+def get_all_embeddings_for_model(
+    embedding_model: str,
+    since_days: Optional[int] = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> List[Dict]:
+    """Get all embeddings for a given model, optionally filtered by date.
+
+    Args:
+        embedding_model: Name of the embedding model
+        since_days: Only get embeddings from the last N days (optional)
+        db_path: Path to database file
+
+    Returns:
+        List of dictionaries with publication_id, embedding, and metadata
+    """
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT pe.publication_id, pe.embedding, pe.embedding_dim, pe.content_hash,
+                   p.title, p.source, p.published_date, p.canonical_url
+            FROM publication_embeddings pe
+            JOIN publications p ON pe.publication_id = p.id
+            WHERE pe.embedding_model = ?
+        """
+        params = [embedding_model]
+
+        if since_days is not None:
+            query += " AND p.created_at >= datetime('now', ?)"
+            params.append(f'-{since_days} days')
+
+        query += " ORDER BY p.created_at DESC"
+
+        cursor.execute(query, params)
+
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "publication_id": row[0],
+                "embedding": row[1],
+                "embedding_dim": row[2],
+                "content_hash": row[3],
+                "title": row[4],
+                "source": row[5],
+                "published_date": row[6],
+                "canonical_url": row[7],
+            })
+
+        conn.close()
+        return results
+
+    except Exception as e:
+        logger.warning("Failed to get embeddings for model: %s", e)
+        return []
+
+
+def get_all_publications(
+    since_days: Optional[int] = None,
+    limit: Optional[int] = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> List[Dict]:
+    """Get all publications, optionally filtered by date.
+
+    Args:
+        since_days: Only get publications from the last N days (optional)
+        limit: Maximum number of publications to return (optional)
+        db_path: Path to database file
+
+    Returns:
+        List of publication dictionaries
+    """
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT id, title, authors, source, venue, published_date, url, raw_text,
+                   summary, doi, pmid, canonical_url, source_type, created_at
+            FROM publications
+            WHERE 1=1
+        """
+        params = []
+
+        if since_days is not None:
+            query += " AND created_at >= datetime('now', ?)"
+            params.append(f'-{since_days} days')
+
+        query += " ORDER BY created_at DESC"
+
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        cursor.execute(query, params)
+
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "id": row[0],
+                "title": row[1],
+                "authors": row[2],
+                "source": row[3],
+                "venue": row[4],
+                "published_date": row[5],
+                "url": row[6],
+                "raw_text": row[7],
+                "summary": row[8],
+                "doi": row[9],
+                "pmid": row[10],
+                "canonical_url": row[11],
+                "source_type": row[12],
+                "created_at": row[13],
+            })
+
+        conn.close()
+        return results
+
+    except Exception as e:
+        logger.warning("Failed to get all publications: %s", e)
+        return []

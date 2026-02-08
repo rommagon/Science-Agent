@@ -577,7 +577,7 @@ def main() -> None:
     if ENABLE_RELEVANCE_SCORING:
         logger.info("Phase 2.5: Computing relevance scores")
         from scoring.relevance import compute_relevance_score
-        from mcp_server.llm_relevancy import init_run_cache
+        from mcp_server.llm_relevancy import init_run_cache, SCORING_VERSION
 
         # Get DB path for this run
         db_path = _default_db_path(outdir)
@@ -589,7 +589,7 @@ def main() -> None:
         for pub_dict in changes["all_with_status"]:
             # Check if we have a cached score before calling
             pub_id = pub_dict.get("id", "")
-            has_cached = (pub_dict.get("scoring_version") == "poc_v2" and
+            has_cached = (pub_dict.get("scoring_version") == SCORING_VERSION and
                          pub_dict.get("relevance_score") is not None)
 
             relevance = compute_relevance_score(

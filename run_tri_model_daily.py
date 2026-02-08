@@ -44,10 +44,16 @@ from config.tri_model_config import (
     validate_config,
     normalize_validation_result,
 )
-from tri_model.reviewers import claude_review, gemini_review
-from tri_model.evaluator import gpt_evaluate
-from tri_model.credibility import score_paper_credibility
-from tri_model.prompts import CLAUDE_REVIEW_PROMPT_V1, GEMINI_REVIEW_PROMPT_V1, GPT_EVALUATOR_PROMPT_V1
+from config.tri_model_config import RELEVANCY_RUBRIC_VERSION
+from tri_model.prompts import get_prompt_hashes
+from tri_model.gating import (
+    gate_publications,
+    filter_for_evaluation,
+    load_gating_config,
+    get_gating_config_hashes,
+    GateResult,
+    GatingStats,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -115,6 +121,10 @@ def review_paper_with_tri_model(
     Returns:
         Dictionary with review results, or None if all reviewers failed
     """
+    from tri_model.reviewers import claude_review, gemini_review
+    from tri_model.evaluator import gpt_evaluate
+    from tri_model.credibility import score_paper_credibility
+
     claude_result = None
     gemini_result = None
 
@@ -248,6 +258,13 @@ def write_must_reads(
                 "credibility_reason": paper.get("credibility", {}).get("credibility_reason", ""),
                 "credibility_confidence": paper.get("credibility", {}).get("credibility_confidence", "low"),
                 "credibility_signals": paper.get("credibility", {}).get("credibility_signals", {}),
+                # Gate info (if gating was enabled)
+                **({
+                    "gate_bucket": paper["gate_info"]["gate_bucket"],
+                    "gate_score": paper["gate_info"]["gate_score"],
+                    "gate_reason": paper["gate_info"]["gate_reason"],
+                    "gate_audit_selected": paper["gate_info"]["gate_audit_selected"],
+                } if paper.get("gate_info") else {}),
             }
             for paper in must_reads
         ],
@@ -322,6 +339,14 @@ def write_manifest(
     available_reviewers: List[str],
     window_mode: str,
     matched_daily_run_id: Optional[str] = None,
+    prompt_version: str = "v2",
+    rubric_version: str = RELEVANCY_RUBRIC_VERSION,
+    prompt_hash: Optional[str] = None,
+    experiment_id: Optional[str] = None,
+    gating_enabled: bool = False,
+    gating_stats: Optional[Dict] = None,
+    gating_config_hashes: Optional[Dict] = None,
+    gate_audit_rate: float = 0.02,
 ) -> None:
     """Write manifest file with run metadata.
 
@@ -340,6 +365,10 @@ def write_manifest(
         available_reviewers: List of available reviewers
         window_mode: Window determination mode
         matched_daily_run_id: Matched daily run ID (if applicable)
+        gating_enabled: Whether gating was enabled for this run
+        gating_stats: Gating statistics (bucket counts, etc.)
+        gating_config_hashes: Hashes of venue/keyword lists
+        gate_audit_rate: Audit rate used for gating
     """
     manifest_data = {
         "run_id": run_id,
@@ -359,6 +388,9 @@ def write_manifest(
             "gpt_evaluations": gpt_eval_count,
         },
         "reviewers_used": available_reviewers,
+        "prompt_version": prompt_version,
+        "rubric_version": rubric_version,
+        "prompt_hash": prompt_hash,
         "local_output_paths": {
             "tri_model_events": str(output_dir / "tri_model_events.jsonl"),
             "must_reads": str(output_dir / "must_reads.json"),
@@ -367,9 +399,21 @@ def write_manifest(
         },
     }
 
+    # Add gating information
+    manifest_data["gating"] = {
+        "enabled": gating_enabled,
+        "audit_rate": gate_audit_rate,
+    }
+    if gating_enabled and gating_stats:
+        manifest_data["gating"]["stats"] = gating_stats
+    if gating_enabled and gating_config_hashes:
+        manifest_data["gating"]["config_hashes"] = gating_config_hashes
+
     # Add matched_daily_run_id if applicable
     if matched_daily_run_id:
         manifest_data["matched_daily_run_id"] = matched_daily_run_id
+    if experiment_id:
+        manifest_data["experiment_id"] = experiment_id
 
     # Write to run output directory
     manifest_path = output_dir / "manifest.json"
@@ -397,10 +441,27 @@ def main() -> None:
         help="Run date (YYYY-MM-DD format, defaults to today)",
     )
     parser.add_argument(
+        "--run-id",
+        type=str,
+        help="Explicit run ID override (optional)",
+    )
+    parser.add_argument(
+        "--experiment-id",
+        type=str,
+        help="Optional experiment identifier for run tracking",
+    )
+    parser.add_argument(
         "--lookback-hours",
         type=int,
         default=48,
         help="Lookback window in hours (default: 48, matches classic daily)",
+    )
+    parser.add_argument(
+        "--prompt-version",
+        type=str,
+        choices=["v1", "v2", "v3"],
+        default="v3",
+        help="Prompt version for tri-model reviewers/evaluator (default: v3)",
     )
     parser.add_argument(
         "--match-daily-run",
@@ -466,7 +527,40 @@ def main() -> None:
         help="Exit with non-zero code if backend ingestion fails",
     )
 
+    # Gating arguments (two-stage pipeline)
+    parser.add_argument(
+        "--enable-gating",
+        action="store_true",
+        default=True,
+        help="Enable two-stage gating to reduce tri-model evaluations (default: True)",
+    )
+    parser.add_argument(
+        "--disable-gating",
+        action="store_true",
+        help="Disable gating and evaluate all papers with tri-model",
+    )
+    parser.add_argument(
+        "--gate-audit-rate",
+        type=float,
+        default=0.02,
+        help="Fraction of LOW bucket papers to audit with tri-model (default: 0.02 = 2%%)",
+    )
+    parser.add_argument(
+        "--gate-venue-whitelist",
+        type=str,
+        help="Path to venue whitelist file (json/yaml/txt). Uses built-in list if not specified.",
+    )
+    parser.add_argument(
+        "--gate-keywords",
+        type=str,
+        help="Path to keywords file (json/yaml/txt). Uses built-in list if not specified.",
+    )
+
     args = parser.parse_args()
+
+    # Handle gating enable/disable flags
+    args.gating_enabled = args.enable_gating and not args.disable_gating
+    os.environ["TRI_MODEL_PROMPT_VERSION"] = args.prompt_version
 
     # Validate tri-model configuration
     if not is_tri_model_enabled():
@@ -591,6 +685,10 @@ def main() -> None:
         window_end.isoformat(),
     )
 
+    if args.run_id:
+        run_id = args.run_id
+        logger.info("Overriding run_id with explicit value: %s", run_id)
+
     # Create output directories
     outdir = Path(args.outdir)
     run_output_dir = create_output_directories(run_id, outdir)
@@ -601,6 +699,7 @@ def main() -> None:
     print("Tri-Model Daily Run - Classic Scraper Path")
     print("=" * 70)
     print(f"Run ID:          {run_id}")
+    print(f"Prompt version:  {args.prompt_version}")
     print(f"Window:          {window_start.strftime('%Y-%m-%d %H:%M:%S')} to {window_end.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Window mode:     {window_mode}")
     if matched_daily_run_id:
@@ -689,8 +788,149 @@ def main() -> None:
     else:
         logger.warning("Database storage failed: %s (continuing pipeline)", db_result["error"])
 
+    # Phase 1.7: Enrich with canonical URLs
+    logger.info("Phase 1.7: Enriching publications with canonical URLs")
+    try:
+        from enrich.canonical_url import resolve_canonical_url
+        canonical_url_success = 0
+        canonical_url_failed = 0
+
+        for pub in publications:
+            try:
+                pub_dict = {
+                    "id": pub.id,
+                    "title": pub.title,
+                    "url": getattr(pub, "url", ""),
+                    "doi": None,  # Will be extracted
+                    "pmid": None,  # Will be extracted
+                    "source": pub.source,
+                    "raw_text": getattr(pub, "raw_text", ""),
+                }
+
+                canonical_url, doi, pmid, source_type = resolve_canonical_url(pub_dict)
+
+                if canonical_url or doi or pmid or source_type:
+                    if database_url:
+                        result = store.update_publication_canonical_url(
+                            publication_id=pub.id,
+                            canonical_url=canonical_url,
+                            doi=doi,
+                            pmid=pmid,
+                            source_type=source_type,
+                            database_url=database_url,
+                        )
+                    else:
+                        result = store.update_publication_canonical_url(
+                            publication_id=pub.id,
+                            canonical_url=canonical_url,
+                            doi=doi,
+                            pmid=pmid,
+                            source_type=source_type,
+                            db_path=db_path,
+                        )
+
+                    if result.get("success"):
+                        canonical_url_success += 1
+                    else:
+                        canonical_url_failed += 1
+            except Exception as e:
+                canonical_url_failed += 1
+                logger.debug("Failed to resolve canonical URL for %s: %s", pub.id[:16], e)
+
+        logger.info(
+            "Canonical URL enrichment: %d success, %d failed",
+            canonical_url_success,
+            canonical_url_failed,
+        )
+    except ImportError:
+        logger.warning("Canonical URL module not available, skipping enrichment")
+    except Exception as e:
+        logger.warning("Canonical URL enrichment failed: %s (continuing pipeline)", e)
+
+    # Phase 1.8: Generate embeddings (non-blocking)
+    logger.info("Phase 1.8: Generating embeddings for publications")
+    try:
+        from acitrack.semantic_search import (
+            build_embedding_text,
+            compute_content_hash,
+            embed_text,
+            embedding_to_bytes,
+            get_embedding_dimension,
+            get_openai_api_key,
+            DEFAULT_EMBEDDING_MODEL,
+        )
+
+        api_key = get_openai_api_key()
+        if not api_key:
+            logger.warning("OpenAI API key not configured, skipping embedding generation")
+        else:
+            embedding_model = DEFAULT_EMBEDDING_MODEL
+            embedding_dim = get_embedding_dimension(embedding_model)
+            embeddings_success = 0
+            embeddings_failed = 0
+
+            for pub in publications:
+                try:
+                    pub_dict = {
+                        "title": pub.title,
+                        "raw_text": getattr(pub, "raw_text", ""),
+                        "summary": getattr(pub, "summary", ""),
+                        "source": pub.source,
+                        "venue": getattr(pub, "venue", ""),
+                        "published_date": getattr(pub, "date", ""),
+                    }
+
+                    text = build_embedding_text(pub_dict)
+                    if not text or len(text.strip()) < 10:
+                        continue
+
+                    content_hash = compute_content_hash(text)
+                    embedding = embed_text(text, model=embedding_model, api_key=api_key)
+
+                    if embedding is not None:
+                        embedding_bytes = embedding_to_bytes(embedding)
+
+                        if database_url:
+                            result = store.store_publication_embedding(
+                                publication_id=pub.id,
+                                embedding_model=embedding_model,
+                                embedding_dim=embedding_dim,
+                                embedding=embedding_bytes,
+                                content_hash=content_hash,
+                                database_url=database_url,
+                            )
+                        else:
+                            result = store.store_publication_embedding(
+                                publication_id=pub.id,
+                                embedding_model=embedding_model,
+                                embedding_dim=embedding_dim,
+                                embedding=embedding_bytes,
+                                content_hash=content_hash,
+                                db_path=db_path,
+                            )
+
+                        if result.get("success"):
+                            embeddings_success += 1
+                        else:
+                            embeddings_failed += 1
+                    else:
+                        embeddings_failed += 1
+                except Exception as e:
+                    embeddings_failed += 1
+                    logger.debug("Failed to generate embedding for %s: %s", pub.id[:16], e)
+
+            logger.info(
+                "Embedding generation: %d success, %d failed",
+                embeddings_success,
+                embeddings_failed,
+            )
+    except ImportError as e:
+        logger.warning("Semantic search module not available, skipping embedding generation: %s", e)
+    except Exception as e:
+        logger.warning("Embedding generation failed: %s (continuing pipeline)", e)
+
     # Convert publications to dict format for tri-model review
-    papers_to_review = []
+    all_papers = []
     missing_abstract_count = 0
 
     for pub in publications:
@@ -698,6 +938,7 @@ def main() -> None:
             "id": pub.id,
             "title": pub.title,
             "source": pub.source,
+            "venue": getattr(pub, "venue", None) or pub.source,
             "date": getattr(pub, "date", None),
             "url": getattr(pub, "url", None),
             "raw_text": getattr(pub, "raw_text", ""),
@@ -707,9 +948,70 @@ def main() -> None:
             missing_abstract_count += 1
             logger.debug("Missing abstract for %s", pub.id[:16])
         else:
-            papers_to_review.append(paper)
+            all_papers.append(paper)
 
-    # Apply max-papers cap if specified
+    # Phase 1.9: Two-stage gating (if enabled)
+    gating_stats = None
+    gating_config_hashes = None
+    paper_gate_results = {}  # Map paper ID to GateResult
+
+    if args.gating_enabled:
+        logger.info("Phase 1.9: Two-stage gating (%d papers)", len(all_papers))
+
+        # Load gating configuration
+        venue_whitelist, keywords = load_gating_config(
+            venue_whitelist_path=args.gate_venue_whitelist,
+            keywords_path=args.gate_keywords,
+        )
+
+        # Get config hashes for manifest
+        gating_config_hashes = get_gating_config_hashes(venue_whitelist, keywords)
+
+        # Gate all papers
+        gated_results, gating_stats_obj = gate_publications(
+            publications=all_papers,
+            venue_whitelist=venue_whitelist,
+            keywords=keywords,
+            audit_rate=args.gate_audit_rate,
+            audit_seed=hash(run_id) % (2**31),  # Deterministic seed from run_id
+        )
+
+        gating_stats = gating_stats_obj.to_dict()
+
+        # Store gate results for each paper
+        for paper, gate_result in gated_results:
+            paper_gate_results[paper["id"]] = gate_result
+
+        # Filter to papers that should be tri-model evaluated
+        papers_to_evaluate = filter_for_evaluation(gated_results)
+        papers_to_review = [paper for paper, _ in papers_to_evaluate]
+
+        logger.info(
+            "Gating: %d usable → %d high + %d maybe + %d audited_low = %d to evaluate",
+            len(all_papers),
+            gating_stats["high"],
+            gating_stats["maybe"],
+            gating_stats["audited_low"],
+            len(papers_to_review),
+        )
+
+        # Print gating summary
+        print(f"\n{'='*70}")
+        print("Gating Summary")
+        print(f"{'='*70}")
+        print(f"  Total usable papers:    {len(all_papers)}")
+        print(f"  HIGH bucket:            {gating_stats['high']}")
+        print(f"  MAYBE bucket:           {gating_stats['maybe']}")
+        print(f"  LOW bucket:             {gating_stats['low']}")
+        print(f"  LOW audited:            {gating_stats['audited_low']} ({args.gate_audit_rate*100:.1f}% audit rate)")
+        print(f"  To tri-model evaluate:  {len(papers_to_review)}")
+        print(f"  Evaluation reduction:   {100*(1 - len(papers_to_review)/len(all_papers)):.1f}%")
+        print(f"{'='*70}\n")
+    else:
+        logger.info("Gating disabled, all %d papers will be tri-model evaluated", len(all_papers))
+        papers_to_review = all_papers
+
+    # Apply max-papers cap if specified (applies after gating)
     if args.max_papers and len(papers_to_review) > args.max_papers:
         logger.info("Applying max-papers cap: %d → %d", len(papers_to_review), args.max_papers)
         # Sort by date descending and take most recent
@@ -725,18 +1027,35 @@ def main() -> None:
 
     # Phase 2: Tri-model review loop
     logger.info("Phase 2: Tri-model review loop (%d papers)", len(papers_to_review))
+    prompt_hashes = get_prompt_hashes(args.prompt_version)
+    prompt_hash = prompt_hashes["combined"]
 
     results = []
     reviewer_failures_count = 0
 
     for i, paper in enumerate(papers_to_review, 1):
-        logger.info("Reviewing paper %d/%d: %s", i, len(papers_to_review), paper["title"][:60])
+        # Get gate result if gating was enabled
+        gate_result = paper_gate_results.get(paper["id"])
+        gate_info = gate_result.to_dict() if gate_result else None
+
+        if gate_info:
+            bucket_str = f" [{gate_info['gate_bucket']}]"
+            if gate_info.get("gate_audit_selected"):
+                bucket_str += " (audit)"
+        else:
+            bucket_str = ""
+
+        logger.info("Reviewing paper %d/%d%s: %s", i, len(papers_to_review), bucket_str, paper["title"][:60])
 
         result = review_paper_with_tri_model(paper, available_reviewers)
 
         if result is None:
             reviewer_failures_count += 1
             continue
+
+        # Add gate info to result
+        if gate_info:
+            result["gate_info"] = gate_info
 
         results.append(result)
 
@@ -750,9 +1069,12 @@ def main() -> None:
 
         # Extract prompt versions and model names
         prompt_versions = {
-            "claude": "v1",
-            "gemini": "v1",
-            "gpt": "v1",
+            "claude": args.prompt_version,
+            "gemini": args.prompt_version,
+            "gpt": args.prompt_version,
+            "rubric_version": RELEVANCY_RUBRIC_VERSION,
+            "prompt_hash": prompt_hash,
+            "prompt_hashes": prompt_hashes,
         }
 
         model_names = {
@@ -885,13 +1207,21 @@ def main() -> None:
         raw_fetched_count=raw_fetched_count,
         window_filtered_count=window_filtered_count,
         deduplicated_count=dedupe_stats["total_output"],
-        usable_count=len(papers_to_review),
+        usable_count=len(all_papers),  # Total usable before gating
         missing_abstract_count=missing_abstract_count,
         reviewer_failures_count=reviewer_failures_count,
         gpt_eval_count=len(results),
         available_reviewers=available_reviewers,
         window_mode=window_mode,
         matched_daily_run_id=matched_daily_run_id,
+        prompt_version=args.prompt_version,
+        rubric_version=RELEVANCY_RUBRIC_VERSION,
+        prompt_hash=prompt_hash,
+        experiment_id=args.experiment_id,
+        gating_enabled=args.gating_enabled,
+        gating_stats=gating_stats,
+        gating_config_hashes=gating_config_hashes,
+        gate_audit_rate=args.gate_audit_rate,
     )
 
     # Phase 6: Upload to Drive (optional)

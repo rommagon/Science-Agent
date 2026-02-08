@@ -222,7 +222,7 @@ def _score_relevancy_with_llm(must_reads: List[dict], run_id: Optional[str] = No
     """Score relevancy using LLM for each must_read item in-place.
 
     Uses the llm_relevancy module to compute LLM-based relevancy scores.
-    Respects caching: items with scoring_version="poc_v2" are not re-scored.
+    Respects caching: items with current relevancy scoring_version are not re-scored.
 
     IMPORTANT: If run_id is provided, this function will use the run cache which should
     have been populated during Phase 2.5 of the pipeline. This prevents duplicate scoring.

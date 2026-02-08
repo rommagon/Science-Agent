@@ -4,9 +4,10 @@ This module provides review functions that call Claude and Gemini APIs
 to analyze publications and return structured reviews.
 """
 
-import json
 import logging
+import os
 import time
+import concurrent.futures
 from typing import Dict, Optional
 from datetime import datetime
 
@@ -22,13 +23,12 @@ from config.tri_model_config import (
 )
 from tri_model.prompts import get_claude_prompt, get_gemini_prompt
 from tri_model.text_sanitize import sanitize_for_llm, sanitize_paper_for_review
-
-import hashlib
+from tri_model.json_utils import extract_json_object, normalize_review_json
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_review_json(response_text: str) -> Optional[Dict]:
+def _parse_review_json(response_text: str, prompt_version: str) -> Dict:
     """Parse and validate review JSON response.
 
     Args:
@@ -37,50 +37,43 @@ def _parse_review_json(response_text: str) -> Optional[Dict]:
     Returns:
         Parsed dict or None if invalid
     """
-    if not response_text:
-        return None
+    data = extract_json_object(response_text)
+    data = normalize_review_json(data, prompt_version)
+    logger.debug("Normalized review types: %s", {k: type(v).__name__ for k, v in data.items()})
 
-    try:
-        # Remove markdown code fences if present
-        text = response_text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            lines = lines[1:]  # Remove first line (```json or ```)
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]  # Remove last line (```)
-            text = "\n".join(lines)
+    required_fields = ["relevancy_score", "relevancy_reason", "signals", "summary", "confidence"]
+    missing = sorted([field for field in required_fields if field not in data])
+    if missing:
+        logger.warning("Review response missing required fields: %s", missing)
+        raise ValueError(f"Missing required fields: {missing}")
 
-        data = json.loads(text)
+    type_mismatches = []
+    if not isinstance(data.get("relevancy_score"), int):
+        type_mismatches.append(("relevancy_score", "int", type(data.get("relevancy_score")).__name__))
+    if not isinstance(data.get("relevancy_reason"), str):
+        type_mismatches.append(("relevancy_reason", "str", type(data.get("relevancy_reason")).__name__))
+    if not isinstance(data.get("summary"), str):
+        type_mismatches.append(("summary", "str", type(data.get("summary")).__name__))
+    if not isinstance(data.get("signals"), dict):
+        type_mismatches.append(("signals", "dict", type(data.get("signals")).__name__))
+    if "concerns" in data and not isinstance(data.get("concerns"), list):
+        type_mismatches.append(("concerns", "list", type(data.get("concerns")).__name__))
+    if not isinstance(data.get("confidence"), str):
+        type_mismatches.append(("confidence", "str", type(data.get("confidence")).__name__))
 
-        # Validate required fields
-        required_fields = ["relevancy_score", "relevancy_reason", "signals", "summary", "concerns", "confidence"]
-        if not all(field in data for field in required_fields):
-            logger.warning("Review response missing required fields: %s", data.keys())
-            return None
+    if type_mismatches:
+        logger.warning("Review response type mismatches: %s", type_mismatches)
+        raise ValueError(f"Type mismatches: {type_mismatches}")
 
-        # Validate score range
-        if not isinstance(data["relevancy_score"], int) or not (0 <= data["relevancy_score"] <= 100):
-            logger.warning("Invalid relevancy_score: %s", data.get("relevancy_score"))
-            return None
+    if not (0 <= data["relevancy_score"] <= 100):
+        logger.warning("Invalid relevancy_score: %s", data.get("relevancy_score"))
+        raise ValueError("relevancy_score out of range")
 
-        # Validate confidence
-        if data["confidence"] not in ["low", "medium", "high"]:
-            logger.warning("Invalid confidence: %s", data.get("confidence"))
-            return None
+    if data["confidence"] not in ["low", "medium", "high"]:
+        logger.warning("Invalid confidence: %s", data.get("confidence"))
+        raise ValueError("confidence must be low/medium/high")
 
-        # Validate signals structure
-        if not isinstance(data["signals"], dict):
-            logger.warning("Signals is not a dict: %s", type(data["signals"]))
-            return None
-
-        return data
-
-    except json.JSONDecodeError as e:
-        logger.warning("Failed to parse review JSON: %s", e)
-        return None
-    except Exception as e:
-        logger.warning("Unexpected error parsing review: %s", e)
-        return None
+    return data
 
 
 def claude_review(paper: Dict) -> Dict:
@@ -130,7 +123,8 @@ def claude_review(paper: Dict) -> Dict:
             "reviewed_at": datetime.now().isoformat(),
         }
 
-    prompt = get_claude_prompt(title, source, abstract)
+    prompt_version = os.getenv("TRI_MODEL_PROMPT_VERSION", CLAUDE_REVIEW_VERSION)
+    prompt = get_claude_prompt(title, source, abstract, version=prompt_version)
 
     # Final sanitization of prompt string before API call (last mile defense)
     prompt = sanitize_for_llm(prompt)
@@ -146,16 +140,11 @@ def claude_review(paper: Dict) -> Dict:
     start_time = time.time()
     parsed_review = None
     successful_model = None
+    parse_errors = []
 
     for attempt in range(MAX_REVIEW_RETRIES):
         try:
             from anthropic import Anthropic
-
-            # Safe debug logging for API key (only on first attempt)
-            if attempt == 0:
-                key_hash = hashlib.sha256(CLAUDE_API_KEY.encode('utf-8')).hexdigest()[:12]
-                logger.debug("Initializing Claude client: key_length=%d, key_hash=%s",
-                           len(CLAUDE_API_KEY), key_hash)
 
             client = Anthropic(api_key=CLAUDE_API_KEY)
 
@@ -218,14 +207,24 @@ def claude_review(paper: Dict) -> Dict:
 
             response_text = response.content[0].text
 
-            parsed_review = _parse_review_json(response_text)
+            try:
+                parsed_review = _parse_review_json(response_text, prompt_version)
+            except Exception as e:
+                parse_error = f"{type(e).__name__}: {e}"
+                parse_errors.append(parse_error)
+                logger.warning(
+                    "Failed to parse Claude response on attempt %d (model=%s): %s",
+                    attempt + 1,
+                    model_used,
+                    parse_error,
+                )
+                logger.warning("Claude response snippet: %s", response_text[:300])
+                parsed_review = None
+
             if parsed_review:
                 logger.info("Successfully got Claude review for: %s (score=%d, model=%s)",
                            title[:80], parsed_review["relevancy_score"], model_used)
                 break
-            else:
-                logger.warning("Failed to parse Claude response on attempt %d: %s",
-                              attempt + 1, response_text[:200])
 
         except Exception as e:
             # Diagnostic: check for unicode issues in the prompt
@@ -264,13 +263,16 @@ def claude_review(paper: Dict) -> Dict:
             "reviewed_at": datetime.now().isoformat(),
         }
     else:
+        error_message = f"Failed to parse response after {MAX_REVIEW_RETRIES} attempts"
+        if parse_errors:
+            error_message = f"{error_message}: {parse_errors[-1]}"
         return {
             "success": False,
             "review": None,
             "model": successful_model or CLAUDE_MODEL,
             "version": CLAUDE_REVIEW_VERSION,
             "latency_ms": latency_ms,
-            "error": f"Failed to parse response after {MAX_REVIEW_RETRIES} attempts",
+            "error": error_message,
             "reviewed_at": datetime.now().isoformat(),
         }
 
@@ -313,7 +315,8 @@ def gemini_review(paper: Dict) -> Dict:
             "reviewed_at": datetime.now().isoformat(),
         }
 
-    prompt = get_gemini_prompt(title, source, abstract)
+    prompt_version = os.getenv("TRI_MODEL_PROMPT_VERSION", GEMINI_REVIEW_VERSION)
+    prompt = get_gemini_prompt(title, source, abstract, version=prompt_version)
 
     # Final sanitization of prompt string before API call (last mile defense)
     prompt = sanitize_for_llm(prompt)
@@ -328,14 +331,28 @@ def gemini_review(paper: Dict) -> Dict:
     # Call Gemini API with retry logic
     start_time = time.time()
     parsed_review = None
+    parse_errors = []
 
     for attempt in range(MAX_REVIEW_RETRIES):
         try:
-            # TODO: Migrate from deprecated google.generativeai to google.genai
-            # The google-generativeai package is deprecated. Future versions should use:
-            # from google import genai
-            # See: https://ai.google.dev/gemini-api/docs/migrate-to-v1-5
-            import google.generativeai as genai
+            try:
+                from importlib import metadata as importlib_metadata
+            except ImportError:
+                import importlib_metadata  # type: ignore
+
+            if not hasattr(importlib_metadata, "packages_distributions"):
+                try:
+                    from importlib_metadata import packages_distributions as _pkg_dist  # type: ignore
+                    setattr(importlib_metadata, "packages_distributions", _pkg_dist)
+                except Exception:
+                    setattr(importlib_metadata, "packages_distributions", lambda: {})
+
+            # TODO: Migrate from deprecated google.generativeai to google.genai.
+            try:
+                import google.generativeai as genai  # type: ignore
+            except Exception as import_err:
+                logger.warning("Gemini import failed: %s", import_err)
+                raise
 
             genai.configure(api_key=GEMINI_API_KEY)
             model = genai.GenerativeModel(GEMINI_MODEL)
@@ -346,25 +363,43 @@ def gemini_review(paper: Dict) -> Dict:
             sanitized_prompt = sanitize_for_llm(prompt)
             sanitized_prompt = sanitized_prompt.encode("utf-8", "replace").decode("utf-8")
 
-            response = model.generate_content(
-                sanitized_prompt,
-                generation_config={
-                    "temperature": 0.3,
-                    "max_output_tokens": 1024,
-                },
-                request_options={"timeout": REVIEW_TIMEOUT_SECONDS},
-            )
+            def _call_model():
+                return model.generate_content(
+                    sanitized_prompt,
+                    generation_config={
+                        "temperature": 0.3,
+                        "max_output_tokens": 1024,
+                    },
+                    request_options={"timeout": REVIEW_TIMEOUT_SECONDS},
+                )
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_call_model)
+                try:
+                    response = future.result(timeout=REVIEW_TIMEOUT_SECONDS + 5)
+                except concurrent.futures.TimeoutError as timeout_err:
+                    raise TimeoutError("Gemini generate_content timed out") from timeout_err
 
             response_text = response.text
 
-            parsed_review = _parse_review_json(response_text)
+            try:
+                parsed_review = _parse_review_json(response_text, prompt_version)
+            except Exception as e:
+                parse_error = f"{type(e).__name__}: {e}"
+                parse_errors.append(parse_error)
+                logger.warning(
+                    "Failed to parse Gemini response on attempt %d (model=%s): %s",
+                    attempt + 1,
+                    GEMINI_MODEL,
+                    parse_error,
+                )
+                logger.warning("Gemini response snippet: %s", response_text[:300])
+                parsed_review = None
+
             if parsed_review:
                 logger.info("Successfully got Gemini review for: %s (score=%d)",
                            title[:80], parsed_review["relevancy_score"])
                 break
-            else:
-                logger.warning("Failed to parse Gemini response on attempt %d: %s",
-                              attempt + 1, response_text[:200])
 
         except Exception as e:
             # Diagnostic: check for unicode issues in the prompt
@@ -403,12 +438,15 @@ def gemini_review(paper: Dict) -> Dict:
             "reviewed_at": datetime.now().isoformat(),
         }
     else:
+        error_message = f"Failed to parse response after {MAX_REVIEW_RETRIES} attempts"
+        if parse_errors:
+            error_message = f"{error_message}: {parse_errors[-1]}"
         return {
             "success": False,
             "review": None,
             "model": GEMINI_MODEL,
             "version": GEMINI_REVIEW_VERSION,
             "latency_ms": latency_ms,
-            "error": f"Failed to parse response after {MAX_REVIEW_RETRIES} attempts",
+            "error": error_message,
             "reviewed_at": datetime.now().isoformat(),
         }

@@ -10,7 +10,8 @@ with a warning.
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Any
 
 import psycopg2
 from psycopg2.extras import execute_values
@@ -22,6 +23,145 @@ logger = logging.getLogger(__name__)
 
 # Connection pool (initialized lazily)
 _connection_pool = None
+_publications_table_meta_cache: Dict[str, Tuple[set, str, bool]] = {}
+
+
+def _get_publications_table_metadata(conn, database_url: str) -> Tuple[set, str, bool, bool]:
+    """Get publications table metadata.
+
+    Returns:
+        (columns, pk_column, force_python_created_at, force_python_updated_at)
+    """
+    global _publications_table_meta_cache
+
+    cache_key = database_url or "default"
+    if cache_key in _publications_table_meta_cache:
+        return _publications_table_meta_cache[cache_key]
+
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT column_name, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'publications'
+        """
+    )
+    rows = cursor.fetchall()
+    columns = {row[0] for row in rows}
+    cursor.close()
+
+    pk_column = ""
+    for candidate in ("id", "publication_id", "pub_id"):
+        if candidate in columns:
+            pk_column = candidate
+            break
+
+    # If created_at/updated_at are NOT NULL with no default, application must provide them.
+    force_python_created_at = False
+    force_python_updated_at = False
+    for row in rows:
+        col_name, is_nullable, column_default = row
+        if col_name == "created_at" and is_nullable == "NO" and column_default is None:
+            force_python_created_at = True
+        if col_name == "updated_at" and is_nullable == "NO" and column_default is None:
+            force_python_updated_at = True
+
+    logger.info(
+        "PostgreSQL publications columns detected: %s",
+        ", ".join(sorted(columns)),
+    )
+    logger.info("PostgreSQL publications PK column selected: %s", pk_column or "<none>")
+    if force_python_created_at:
+        logger.info("PostgreSQL publications.created_at requires app-side value (NOT NULL with no default)")
+    if force_python_updated_at:
+        logger.info("PostgreSQL publications.updated_at requires app-side value (NOT NULL with no default)")
+
+    _publications_table_meta_cache[cache_key] = (columns, pk_column, force_python_created_at, force_python_updated_at)
+    return columns, pk_column, force_python_created_at, force_python_updated_at
+
+
+def _build_publications_insert_statement(
+    table_columns: set,
+    pk_column: str,
+    force_python_created_at: bool = False,
+    force_python_updated_at: bool = False,
+) -> Tuple[str, List[str]]:
+    """Build schema-tolerant INSERT for publications."""
+    supported_fields = [
+        pk_column,
+        "title",
+        "authors",
+        "source",
+        "venue",
+        "published_at",
+        "published_date",
+        "url",
+        "canonical_url",
+        "doi",
+        "pmid",
+        "source_type",
+        "raw_text",
+        "abstract",
+        "summary",
+        "run_id",
+        "source_names",
+    ]
+    if force_python_created_at:
+        supported_fields.append("created_at")
+    if force_python_updated_at:
+        supported_fields.append("updated_at")
+    insert_columns = [c for c in supported_fields if c and c in table_columns]
+    placeholders = ", ".join(["%s"] * len(insert_columns))
+    column_list = ", ".join(insert_columns)
+
+    if pk_column and pk_column in table_columns:
+        sql = (
+            f"INSERT INTO publications ({column_list}) VALUES ({placeholders}) "
+            f"ON CONFLICT ({pk_column}) DO NOTHING"
+        )
+    else:
+        sql = f"INSERT INTO publications ({column_list}) VALUES ({placeholders})"
+
+    return sql, insert_columns
+
+
+def _map_publication_values(
+    pub: Publication,
+    run_id: str,
+    pk_column: str,
+    insert_columns: List[str],
+    force_python_created_at: bool = False,
+    force_python_updated_at: bool = False,
+) -> List[Any]:
+    """Map a Publication object to INSERT column values."""
+    authors_str = ", ".join(pub.authors) if pub.authors else ""
+    source_names_str = ", ".join(pub.source_names) if getattr(pub, "source_names", None) else ""
+    pub_id = getattr(pub, "id", None)
+    now = datetime.utcnow()
+    created_at_value = now if force_python_created_at else None
+    updated_at_value = now if force_python_updated_at else None
+    values_map = {
+        pk_column: pub_id,
+        "title": getattr(pub, "title", None),
+        "authors": authors_str,
+        "source": getattr(pub, "source", None),
+        "venue": getattr(pub, "venue", None),
+        "published_at": getattr(pub, "date", None),
+        "published_date": getattr(pub, "date", None),
+        "url": getattr(pub, "url", None),
+        "canonical_url": getattr(pub, "canonical_url", None),
+        "doi": getattr(pub, "doi", None),
+        "pmid": getattr(pub, "pmid", None),
+        "source_type": getattr(pub, "source_type", None),
+        "raw_text": getattr(pub, "raw_text", None),
+        "abstract": getattr(pub, "raw_text", None),
+        "summary": getattr(pub, "summary", None),
+        "run_id": run_id,
+        "source_names": source_names_str,
+        "created_at": created_at_value,
+        "updated_at": updated_at_value,
+    }
+    return [values_map.get(col) for col in insert_columns]
 
 
 def _get_connection_pool(database_url: str) -> pool.SimpleConnectionPool:
@@ -114,34 +254,33 @@ def store_publications(
     try:
         conn = _get_connection(database_url)
         cursor = conn.cursor()
+        table_columns, pk_column, force_python_created_at, force_python_updated_at = _get_publications_table_metadata(conn, database_url)
+        if not pk_column:
+            raise RuntimeError("Could not find publications PK column (expected id/publication_id/pub_id)")
+        insert_sql, insert_columns = _build_publications_insert_statement(
+            table_columns,
+            pk_column,
+            force_python_created_at=force_python_created_at,
+            force_python_updated_at=force_python_updated_at,
+        )
 
         inserted = 0
         duplicates = 0
 
         for pub in publications:
             try:
-                authors_str = ", ".join(pub.authors) if pub.authors else ""
-                source_names_str = ", ".join(pub.source_names) if getattr(pub, "source_names", None) else ""
-
-                cursor.execute("""
-                    INSERT INTO papers (
-                        id, title, authors, source, venue, published_at,
-                        url, raw_text, summary, run_id, source_names
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (id) DO NOTHING
-                """, (
-                    pub.id,
-                    pub.title,
-                    authors_str,
-                    pub.source,
-                    getattr(pub, "venue", None),
-                    getattr(pub, "date", None),
-                    getattr(pub, "url", None),
-                    getattr(pub, "raw_text", None),
-                    getattr(pub, "summary", None),
+                values = _map_publication_values(
+                    pub,
                     run_id,
-                    source_names_str,
-                ))
+                    pk_column,
+                    insert_columns,
+                    force_python_created_at=force_python_created_at,
+                    force_python_updated_at=force_python_updated_at,
+                )
+
+                cursor.execute("SAVEPOINT pub_insert_sp")
+                cursor.execute(insert_sql, values)
+                cursor.execute("RELEASE SAVEPOINT pub_insert_sp")
 
                 if cursor.rowcount > 0:
                     inserted += 1
@@ -150,6 +289,11 @@ def store_publications(
 
             except Exception as e:
                 logger.warning("Failed to insert publication %s: %s", getattr(pub, "id", "UNKNOWN"), e)
+                try:
+                    cursor.execute("ROLLBACK TO SAVEPOINT pub_insert_sp")
+                    cursor.execute("RELEASE SAVEPOINT pub_insert_sp")
+                except Exception:
+                    conn.rollback()
                 duplicates += 1
                 continue
 
@@ -609,6 +753,32 @@ def export_relevancy_events_to_jsonl(
             _put_connection(conn)
 
 
+# Cache for tri_model_events table columns
+_tri_model_events_columns_cache: Dict[str, set] = {}
+
+
+def _get_tri_model_events_columns(conn, database_url: str) -> set:
+    """Get available columns in tri_model_events table."""
+    global _tri_model_events_columns_cache
+
+    cache_key = database_url or "default"
+    if cache_key in _tri_model_events_columns_cache:
+        return _tri_model_events_columns_cache[cache_key]
+
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'tri_model_events'
+    """)
+    columns = {row[0] for row in cursor.fetchall()}
+    cursor.close()
+
+    logger.info("tri_model_events columns detected: %s", ", ".join(sorted(columns)))
+    _tri_model_events_columns_cache[cache_key] = columns
+    return columns
+
+
 def store_tri_model_scoring_event(
     run_id: str,
     mode: str,
@@ -632,9 +802,16 @@ def store_tri_model_scoring_event(
     claude_latency_ms: Optional[int],
     gemini_latency_ms: Optional[int],
     gpt_latency_ms: Optional[int],
+    credibility_score: Optional[int] = None,
+    credibility_reason: Optional[str] = None,
+    credibility_confidence: Optional[str] = None,
+    credibility_signals: Optional[Dict] = None,
     database_url: str = None,
 ) -> dict:
-    """Store a tri-model scoring event.
+    """Store a tri-model scoring event (schema-tolerant).
+
+    Dynamically detects available columns in the tri_model_events table
+    and only inserts columns that exist.
 
     Args:
         run_id: Run identifier
@@ -659,6 +836,10 @@ def store_tri_model_scoring_event(
         claude_latency_ms: Claude latency
         gemini_latency_ms: Gemini latency
         gpt_latency_ms: GPT latency
+        credibility_score: Credibility score (optional)
+        credibility_reason: Credibility reason (optional)
+        credibility_confidence: Credibility confidence (optional)
+        credibility_signals: Credibility signals (optional)
         database_url: PostgreSQL connection URL
 
     Returns:
@@ -667,71 +848,96 @@ def store_tri_model_scoring_event(
     conn = None
     try:
         conn = _get_connection(database_url)
+
+        # Get available columns in table
+        available_columns = _get_tri_model_events_columns(conn, database_url)
+
+        # Normalize disagreements to string (handle list/dict from evaluator)
+        if isinstance(disagreements, (list, dict)):
+            disagreements_str = json.dumps(disagreements, ensure_ascii=False)
+        elif disagreements is None:
+            disagreements_str = None
+        else:
+            disagreements_str = str(disagreements)
+
+        # Build column -> value mapping for all possible columns
+        all_columns = {
+            "run_id": run_id,
+            "mode": mode,
+            "publication_id": publication_id,
+            "title": title,
+            "source": source,
+            "published_date": published_date,
+            "claude_review_json": json.dumps(claude_review, ensure_ascii=False) if claude_review else None,
+            "gemini_review_json": json.dumps(gemini_review, ensure_ascii=False) if gemini_review else None,
+            "gpt_eval_json": json.dumps(gpt_eval, ensure_ascii=False) if gpt_eval else None,
+            "final_relevancy_score": final_relevancy_score,
+            "final_relevancy_reason": final_relevancy_reason,
+            "final_signals_json": json.dumps(final_signals, ensure_ascii=False) if final_signals else None,
+            "final_summary": final_summary,
+            "agreement_level": agreement_level,
+            "disagreements": disagreements_str,
+            "evaluator_rationale": evaluator_rationale,
+            "confidence": confidence,
+            "prompt_versions_json": json.dumps(prompt_versions, ensure_ascii=False) if prompt_versions else None,
+            "model_names_json": json.dumps(model_names, ensure_ascii=False) if model_names else None,
+            "claude_latency_ms": claude_latency_ms,
+            "gemini_latency_ms": gemini_latency_ms,
+            "gpt_latency_ms": gpt_latency_ms,
+        }
+
+        # Filter to only columns that exist in the table
+        # Always include these core columns (they should exist)
+        core_columns = ["run_id", "mode", "publication_id"]
+        insert_columns = []
+        insert_values = []
+
+        for col, val in all_columns.items():
+            if col in available_columns:
+                insert_columns.append(col)
+                insert_values.append(val)
+
+        # Add created_at if it exists
+        if "created_at" in available_columns:
+            insert_columns.append("created_at")
+            insert_values.append(None)  # Will use NOW() in SQL
+
+        # Build dynamic SQL
+        col_list = ", ".join(insert_columns)
+        placeholders = ", ".join(
+            "NOW()" if col == "created_at" else "%s"
+            for col in insert_columns
+        )
+
+        # Build ON CONFLICT update clause (exclude created_at from values list)
+        update_cols = [c for c in insert_columns if c not in ("run_id", "publication_id", "created_at")]
+        update_clause = ", ".join(
+            f"{col} = EXCLUDED.{col}" for col in update_cols
+        )
+        if "created_at" in available_columns:
+            update_clause += ", created_at = CURRENT_TIMESTAMP"
+
+        # Remove None for created_at from values (since we use NOW())
+        final_values = [v for c, v in zip(insert_columns, insert_values) if c != "created_at"]
+
         cursor = conn.cursor()
 
-        cursor.execute("""
-            INSERT INTO tri_model_events (
-                run_id, mode, publication_id, title, source, published_date,
-                claude_review_json, gemini_review_json, gpt_eval_json,
-                final_relevancy_score, final_relevancy_reason, final_signals_json,
-                final_summary, agreement_level, disagreements, evaluator_rationale,
-                confidence, prompt_versions_json, model_names_json,
-                claude_latency_ms, gemini_latency_ms, gpt_latency_ms
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        sql = f"""
+            INSERT INTO tri_model_events ({col_list})
+            VALUES ({placeholders})
             ON CONFLICT (run_id, publication_id) DO UPDATE SET
-                mode = EXCLUDED.mode,
-                title = EXCLUDED.title,
-                source = EXCLUDED.source,
-                published_date = EXCLUDED.published_date,
-                claude_review_json = EXCLUDED.claude_review_json,
-                gemini_review_json = EXCLUDED.gemini_review_json,
-                gpt_eval_json = EXCLUDED.gpt_eval_json,
-                final_relevancy_score = EXCLUDED.final_relevancy_score,
-                final_relevancy_reason = EXCLUDED.final_relevancy_reason,
-                final_signals_json = EXCLUDED.final_signals_json,
-                final_summary = EXCLUDED.final_summary,
-                agreement_level = EXCLUDED.agreement_level,
-                disagreements = EXCLUDED.disagreements,
-                evaluator_rationale = EXCLUDED.evaluator_rationale,
-                confidence = EXCLUDED.confidence,
-                prompt_versions_json = EXCLUDED.prompt_versions_json,
-                model_names_json = EXCLUDED.model_names_json,
-                claude_latency_ms = EXCLUDED.claude_latency_ms,
-                gemini_latency_ms = EXCLUDED.gemini_latency_ms,
-                gpt_latency_ms = EXCLUDED.gpt_latency_ms,
-                created_at = CURRENT_TIMESTAMP
-        """, (
-            run_id,
-            mode,
-            publication_id,
-            title,
-            source,
-            published_date,
-            json.dumps(claude_review) if claude_review else None,
-            json.dumps(gemini_review) if gemini_review else None,
-            json.dumps(gpt_eval) if gpt_eval else None,
-            final_relevancy_score,
-            final_relevancy_reason,
-            json.dumps(final_signals),
-            final_summary,
-            agreement_level,
-            disagreements,
-            evaluator_rationale,
-            confidence,
-            json.dumps(prompt_versions),
-            json.dumps(model_names),
-            claude_latency_ms,
-            gemini_latency_ms,
-            gpt_latency_ms,
-        ))
+                {update_clause}
+        """
 
+        cursor.execute(sql, final_values)
         conn.commit()
 
         logger.debug(
-            "Stored tri-model event: run_id=%s, pub_id=%s, score=%s",
+            "Stored tri-model event: run_id=%s, pub_id=%s, score=%s (cols=%d)",
             run_id,
             publication_id[:16],
             final_relevancy_score,
+            len(insert_columns),
         )
 
         return {
@@ -758,7 +964,10 @@ def export_tri_model_events_to_jsonl(
     output_path: str,
     database_url: str = None,
 ) -> dict:
-    """Export tri-model scoring events for a run to JSONL file.
+    """Export tri-model scoring events for a run to JSONL file (schema-tolerant).
+
+    Dynamically detects available columns in the tri_model_events table
+    and only selects columns that exist.
 
     Args:
         run_id: Run identifier to export
@@ -771,17 +980,76 @@ def export_tri_model_events_to_jsonl(
     conn = None
     try:
         conn = _get_connection(database_url)
-        cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT
-                run_id, mode, publication_id, title, source, published_date,
-                claude_review_json, gemini_review_json, gpt_eval_json,
-                final_relevancy_score, final_relevancy_reason, final_signals_json,
-                final_summary, agreement_level, disagreements, evaluator_rationale,
-                confidence, prompt_versions_json, model_names_json,
-                claude_latency_ms, gemini_latency_ms, gpt_latency_ms,
-                created_at
+        # Get available columns in table
+        available_columns = _get_tri_model_events_columns(conn, database_url)
+
+        # Define all desired columns and their JSON parsing needs
+        # Order matters for building the event dict
+        desired_columns = [
+            ("run_id", False),
+            ("mode", False),
+            ("publication_id", False),
+            ("title", False),
+            ("source", False),
+            ("published_date", False),
+            ("claude_review_json", True),
+            ("gemini_review_json", True),
+            ("gpt_eval_json", True),
+            ("final_relevancy_score", False),
+            ("final_relevancy_reason", False),
+            ("final_signals_json", True),
+            ("final_summary", False),
+            ("agreement_level", False),
+            ("disagreements", False),
+            ("evaluator_rationale", False),
+            ("confidence", False),
+            ("prompt_versions_json", True),
+            ("model_names_json", True),
+            ("claude_latency_ms", False),
+            ("gemini_latency_ms", False),
+            ("gpt_latency_ms", False),
+            ("created_at", False),
+        ]
+
+        # Filter to only columns that exist
+        select_columns = []
+        column_meta = []  # (output_key, is_json, is_datetime)
+        for col, is_json in desired_columns:
+            if col in available_columns:
+                select_columns.append(col)
+                # Map JSON column names to cleaner output keys
+                output_key = col.replace("_json", "").replace("claude_review", "claude_review").replace("gemini_review", "gemini_review").replace("gpt_eval", "gpt_eval")
+                if col == "final_signals_json":
+                    output_key = "final_signals"
+                elif col == "prompt_versions_json":
+                    output_key = "prompt_versions"
+                elif col == "model_names_json":
+                    output_key = "model_names"
+                elif col == "claude_review_json":
+                    output_key = "claude_review"
+                elif col == "gemini_review_json":
+                    output_key = "gemini_review"
+                elif col == "gpt_eval_json":
+                    output_key = "gpt_eval"
+                else:
+                    output_key = col
+                is_datetime = col == "created_at"
+                column_meta.append((output_key, is_json, is_datetime))
+
+        if not select_columns:
+            logger.warning("No columns available for export")
+            return {
+                "success": False,
+                "events_exported": 0,
+                "output_path": output_path,
+                "error": "No columns available for export",
+            }
+
+        cursor = conn.cursor()
+        col_list = ", ".join(select_columns)
+        cursor.execute(f"""
+            SELECT {col_list}
             FROM tri_model_events
             WHERE run_id = %s
             ORDER BY created_at ASC
@@ -794,35 +1062,21 @@ def export_tri_model_events_to_jsonl(
         events_exported = 0
         with open(output_path, "w", encoding="utf-8") as f:
             for row in cursor.fetchall():
-                event = {
-                    "run_id": row[0],
-                    "mode": row[1],
-                    "publication_id": row[2],
-                    "title": row[3],
-                    "source": row[4],
-                    "published_date": row[5],
-                    "claude_review": json.loads(row[6]) if row[6] else None,
-                    "gemini_review": json.loads(row[7]) if row[7] else None,
-                    "gpt_eval": json.loads(row[8]) if row[8] else None,
-                    "final_relevancy_score": row[9],
-                    "final_relevancy_reason": row[10],
-                    "final_signals": json.loads(row[11]) if row[11] else {},
-                    "final_summary": row[12],
-                    "agreement_level": row[13],
-                    "disagreements": row[14],
-                    "evaluator_rationale": row[15],
-                    "confidence": row[16],
-                    "prompt_versions": json.loads(row[17]) if row[17] else {},
-                    "model_names": json.loads(row[18]) if row[18] else {},
-                    "claude_latency_ms": row[19],
-                    "gemini_latency_ms": row[20],
-                    "gpt_latency_ms": row[21],
-                    "created_at": row[22].isoformat() if row[22] else None,
-                }
+                event = {}
+                for i, (output_key, is_json, is_datetime) in enumerate(column_meta):
+                    val = row[i]
+                    if val is None:
+                        event[output_key] = None
+                    elif is_json:
+                        event[output_key] = json.loads(val) if val else None
+                    elif is_datetime:
+                        event[output_key] = val.isoformat() if val else None
+                    else:
+                        event[output_key] = val
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
                 events_exported += 1
 
-        logger.info("Exported %d tri-model events to %s", events_exported, output_path)
+        logger.info("Exported %d tri-model events to %s (cols=%d)", events_exported, output_path, len(select_columns))
 
         return {
             "success": True,
@@ -839,6 +1093,526 @@ def export_tri_model_events_to_jsonl(
             "output_path": output_path,
             "error": str(e),
         }
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
+
+
+def update_publication_canonical_url(
+    publication_id: str,
+    canonical_url: Optional[str],
+    doi: Optional[str] = None,
+    pmid: Optional[str] = None,
+    source_type: Optional[str] = None,
+    database_url: str = None,
+) -> dict:
+    """Update a publication's canonical URL and related fields.
+
+    Args:
+        publication_id: Publication ID
+        canonical_url: Canonical URL to set
+        doi: DOI to set (optional)
+        pmid: PMID to set (optional)
+        source_type: Source type to set (optional)
+        database_url: PostgreSQL connection URL
+
+    Returns:
+        Dictionary with update result
+    """
+    conn = None
+    try:
+        conn = _get_connection(database_url)
+        cursor = conn.cursor()
+
+        # Build dynamic UPDATE statement
+        fields = []
+        values = []
+
+        if canonical_url is not None:
+            fields.append("canonical_url = %s")
+            values.append(canonical_url)
+
+        if doi is not None:
+            fields.append("doi = %s")
+            values.append(doi)
+
+        if pmid is not None:
+            fields.append("pmid = %s")
+            values.append(pmid)
+
+        if source_type is not None:
+            fields.append("source_type = %s")
+            values.append(source_type)
+
+        if not fields:
+            return {"success": True, "updated": False, "error": None}
+
+        values.append(publication_id)
+
+        cursor.execute(
+            f"UPDATE publications SET {', '.join(fields)} WHERE publication_id = %s",
+            values
+        )
+
+        updated = cursor.rowcount > 0
+        conn.commit()
+
+        return {
+            "success": True,
+            "updated": updated,
+            "error": None,
+        }
+
+    except Exception as e:
+        logger.warning("Failed to update publication canonical URL: %s", e)
+        if conn:
+            conn.rollback()
+        return {
+            "success": False,
+            "updated": False,
+            "error": str(e),
+        }
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
+
+
+def get_publications_missing_canonical_url(
+    since_days: Optional[int] = None,
+    limit: Optional[int] = None,
+    database_url: str = None,
+) -> List[Dict]:
+    """Get publications that don't have a canonical URL.
+
+    Args:
+        since_days: Only get publications from the last N days (optional)
+        limit: Maximum number of publications to return (optional)
+        database_url: PostgreSQL connection URL
+
+    Returns:
+        List of publication dictionaries
+    """
+    conn = None
+    try:
+        conn = _get_connection(database_url)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT publication_id, title, url, doi, pmid, source, source_type, published_date, raw_text
+            FROM publications
+            WHERE canonical_url IS NULL OR canonical_url = ''
+        """
+        params = []
+
+        if since_days is not None:
+            query += " AND created_at >= NOW() - INTERVAL '%s days'"
+            params.append(since_days)
+
+        query += " ORDER BY created_at DESC"
+
+        if limit is not None:
+            query += " LIMIT %s"
+            params.append(limit)
+
+        cursor.execute(query, params)
+
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "id": row[0],
+                "title": row[1],
+                "url": row[2],
+                "doi": row[3],
+                "pmid": row[4],
+                "source": row[5],
+                "source_type": row[6],
+                "published_date": row[7].isoformat() if row[7] else None,
+                "raw_text": row[8],
+            })
+
+        return results
+
+    except Exception as e:
+        logger.warning("Failed to get publications missing canonical URL: %s", e)
+        return []
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
+
+
+def get_publication_by_id(
+    publication_id: str,
+    database_url: str = None,
+) -> Optional[Dict]:
+    """Get a single publication by ID.
+
+    Args:
+        publication_id: Publication ID
+        database_url: PostgreSQL connection URL
+
+    Returns:
+        Publication dictionary or None
+    """
+    conn = None
+    try:
+        conn = _get_connection(database_url)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT publication_id, title, authors, source, venue, published_date, url, raw_text,
+                   summary, doi, pmid, canonical_url, source_type
+            FROM publications
+            WHERE publication_id = %s
+        """, (publication_id,))
+
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        return {
+            "id": row[0],
+            "title": row[1],
+            "authors": row[2],
+            "source": row[3],
+            "venue": row[4],
+            "published_date": row[5].isoformat() if row[5] else None,
+            "url": row[6],
+            "raw_text": row[7],
+            "summary": row[8],
+            "doi": row[9],
+            "pmid": row[10],
+            "canonical_url": row[11],
+            "source_type": row[12],
+        }
+
+    except Exception as e:
+        logger.warning("Failed to get publication by ID: %s", e)
+        return None
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
+
+
+def store_publication_embedding(
+    publication_id: str,
+    embedding_model: str,
+    embedding_dim: int,
+    embedding: bytes,
+    content_hash: str,
+    database_url: str = None,
+) -> dict:
+    """Store an embedding for a publication.
+
+    Args:
+        publication_id: Publication ID
+        embedding_model: Name of the embedding model used
+        embedding_dim: Dimension of the embedding vector
+        embedding: Embedding bytes (numpy array as bytes)
+        content_hash: SHA256 hash of the input text
+        database_url: PostgreSQL connection URL
+
+    Returns:
+        Dictionary with storage result
+    """
+    conn = None
+    try:
+        conn = _get_connection(database_url)
+        cursor = conn.cursor()
+
+        # Use UPSERT with publication_id as the primary key
+        # Store embedding as bytes in embedding_bytes column
+        cursor.execute("""
+            INSERT INTO publication_embeddings (
+                publication_id, embedding_model, embedding_dim, embedding_bytes, content_hash,
+                created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+            ON CONFLICT (publication_id) DO UPDATE SET
+                embedding_bytes = EXCLUDED.embedding_bytes,
+                embedding_model = EXCLUDED.embedding_model,
+                embedding_dim = EXCLUDED.embedding_dim,
+                content_hash = EXCLUDED.content_hash,
+                updated_at = NOW()
+        """, (
+            publication_id,
+            embedding_model,
+            embedding_dim,
+            embedding,
+            content_hash,
+        ))
+
+        conn.commit()
+
+        logger.debug(
+            "Stored embedding for publication %s (model=%s, dim=%d)",
+            publication_id[:16],
+            embedding_model,
+            embedding_dim,
+        )
+
+        return {
+            "success": True,
+            "error": None,
+        }
+
+    except Exception as e:
+        logger.warning("Failed to store embedding: %s", e)
+        if conn:
+            conn.rollback()
+        return {
+            "success": False,
+            "error": str(e),
+        }
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
+
+
+def get_publication_embedding(
+    publication_id: str,
+    embedding_model: str,
+    database_url: str = None,
+) -> Optional[Dict]:
+    """Get an embedding for a publication.
+
+    Args:
+        publication_id: Publication ID
+        embedding_model: Name of the embedding model
+        database_url: PostgreSQL connection URL
+
+    Returns:
+        Dictionary with embedding data or None
+    """
+    conn = None
+    try:
+        conn = _get_connection(database_url)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT embedding, embedding_dim, content_hash, created_at
+            FROM publication_embeddings
+            WHERE publication_id = %s AND embedding_model = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (publication_id, embedding_model))
+
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        return {
+            "embedding": bytes(row[0]),
+            "embedding_dim": row[1],
+            "content_hash": row[2],
+            "created_at": row[3].isoformat() if row[3] else None,
+        }
+
+    except Exception as e:
+        logger.warning("Failed to get embedding: %s", e)
+        return None
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
+
+
+def get_publications_missing_embeddings(
+    embedding_model: str,
+    since_days: Optional[int] = None,
+    limit: Optional[int] = None,
+    database_url: str = None,
+) -> List[Dict]:
+    """Get publications that don't have an embedding for the given model.
+
+    Args:
+        embedding_model: Name of the embedding model
+        since_days: Only get publications from the last N days (optional)
+        limit: Maximum number of publications to return (optional)
+        database_url: PostgreSQL connection URL
+
+    Returns:
+        List of publication dictionaries
+    """
+    conn = None
+    try:
+        conn = _get_connection(database_url)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT p.publication_id, p.title, p.raw_text, p.summary, p.source, p.venue, p.published_date
+            FROM publications p
+            LEFT JOIN publication_embeddings pe
+                ON p.publication_id = pe.publication_id AND pe.embedding_model = %s
+            WHERE pe.publication_id IS NULL
+        """
+        params = [embedding_model]
+
+        if since_days is not None:
+            query += " AND p.created_at >= NOW() - INTERVAL '%s days'"
+            params.append(since_days)
+
+        query += " ORDER BY p.created_at DESC"
+
+        if limit is not None:
+            query += " LIMIT %s"
+            params.append(limit)
+
+        cursor.execute(query, params)
+
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "id": row[0],
+                "title": row[1],
+                "raw_text": row[2],
+                "summary": row[3],
+                "source": row[4],
+                "venue": row[5],
+                "published_date": row[6].isoformat() if row[6] else None,
+            })
+
+        return results
+
+    except Exception as e:
+        logger.warning("Failed to get publications missing embeddings: %s", e)
+        return []
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
+
+
+def get_all_embeddings_for_model(
+    embedding_model: str,
+    since_days: Optional[int] = None,
+    database_url: str = None,
+) -> List[Dict]:
+    """Get all embeddings for a given model, optionally filtered by date.
+
+    Args:
+        embedding_model: Name of the embedding model
+        since_days: Only get embeddings from the last N days (optional)
+        database_url: PostgreSQL connection URL
+
+    Returns:
+        List of dictionaries with publication_id, embedding, and metadata
+    """
+    conn = None
+    try:
+        conn = _get_connection(database_url)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT pe.publication_id, pe.embedding_bytes, pe.embedding_dim, pe.content_hash,
+                   p.title, p.source, p.published_date, p.canonical_url
+            FROM publication_embeddings pe
+            JOIN publications p ON pe.publication_id = p.publication_id
+            WHERE pe.embedding_model = %s
+        """
+        params = [embedding_model]
+
+        if since_days is not None:
+            query += " AND p.created_at >= NOW() - INTERVAL '%s days'"
+            params.append(since_days)
+
+        query += " ORDER BY p.created_at DESC"
+
+        cursor.execute(query, params)
+
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "publication_id": row[0],
+                "embedding": bytes(row[1]),
+                "embedding_dim": row[2],
+                "content_hash": row[3],
+                "title": row[4],
+                "source": row[5],
+                "published_date": row[6].isoformat() if row[6] else None,
+                "canonical_url": row[7],
+            })
+
+        return results
+
+    except Exception as e:
+        logger.warning("Failed to get embeddings for model: %s", e)
+        return []
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
+
+
+def get_all_publications(
+    since_days: Optional[int] = None,
+    limit: Optional[int] = None,
+    database_url: str = None,
+) -> List[Dict]:
+    """Get all publications, optionally filtered by date.
+
+    Args:
+        since_days: Only get publications from the last N days (optional)
+        limit: Maximum number of publications to return (optional)
+        database_url: PostgreSQL connection URL
+
+    Returns:
+        List of publication dictionaries
+    """
+    conn = None
+    try:
+        conn = _get_connection(database_url)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT publication_id, title, authors, source, venue, published_date, url, raw_text,
+                   summary, doi, pmid, canonical_url, source_type, created_at
+            FROM publications
+            WHERE 1=1
+        """
+        params = []
+
+        if since_days is not None:
+            query += " AND created_at >= NOW() - INTERVAL '%s days'"
+            params.append(since_days)
+
+        query += " ORDER BY created_at DESC"
+
+        if limit is not None:
+            query += " LIMIT %s"
+            params.append(limit)
+
+        cursor.execute(query, params)
+
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "id": row[0],
+                "title": row[1],
+                "authors": row[2],
+                "source": row[3],
+                "venue": row[4],
+                "published_date": row[5].isoformat() if row[5] else None,
+                "url": row[6],
+                "raw_text": row[7],
+                "summary": row[8],
+                "doi": row[9],
+                "pmid": row[10],
+                "canonical_url": row[11],
+                "source_type": row[12],
+                "created_at": row[13].isoformat() if row[13] else None,
+            })
+
+        return results
+
+    except Exception as e:
+        logger.warning("Failed to get all publications: %s", e)
+        return []
     finally:
         if conn:
             cursor.close()

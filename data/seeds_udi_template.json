@@ -1,0 +1,17 @@
+[
+  {
+    "type": "pmid",
+    "value": "",
+    "comment": "Add PMID here (e.g., 39385123)"
+  },
+  {
+    "type": "doi",
+    "value": "",
+    "comment": "Add DOI here (e.g., 10.1038/s41586-024-07051-0)"
+  },
+  {
+    "type": "url",
+    "value": "",
+    "comment": "Add URL here - DOI/PMID will be auto-extracted if present"
+  }
+]

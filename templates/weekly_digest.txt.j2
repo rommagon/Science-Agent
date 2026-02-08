@@ -1,0 +1,84 @@
+================================================================================
+SPOTITEARLY MUST-READS
+Week of {{ week_start }} to {{ week_end }}
+================================================================================
+
+TOP 5 MUST-READS — Ranked by relevance to early detection
+
+Your weekly digest of the most important cancer early detection research.
+{{ must_reads|length }} publications selected from {{ total_candidates }} screened.
+
+{% for item in must_reads %}
+--------------------------------------------------------------------------------
+#{{ loop.index }}: {{ item.title }}
+--------------------------------------------------------------------------------
+
+Source: {{ item.source or 'Unknown Source' }}{% if item.venue and item.venue != item.source %} | {{ item.venue }}{% endif %}
+
+Date: {{ item.published_date[:10] if item.published_date is string else (item.published_date.strftime('%Y-%m-%d') if item.published_date else 'Date unavailable') }}
+
+{% if item.link %}
+Link: {{ item.link }}
+{% endif %}
+{% if item.thumbs_up_url and item.thumbs_down_url %}
+Feedback: 👍 {{ item.thumbs_up_url }} | 👎 {{ item.thumbs_down_url }}
+{% endif %}
+{% if item.relevancy_ordinal or item.credibility_ordinal or item.relevancy_score is not none or item.credibility_score is not none %}
+Scores: {% if item.relevancy_ordinal %}Relevancy: {{ item.relevancy_ordinal }}{% elif item.relevancy_score is not none %}Relevancy: {% if item.relevancy_score >= 80 %}High{% elif item.relevancy_score >= 65 %}Moderate{% else %}Exploratory{% endif %}{% endif %}{% if (item.relevancy_ordinal or item.relevancy_score is not none) and (item.credibility_ordinal or item.credibility_score is not none) %} | {% endif %}{% if item.credibility_ordinal %}Evidence: {{ item.credibility_ordinal }}{% elif item.credibility_score is not none %}Evidence: {% if item.credibility_score >= 80 %}High{% elif item.credibility_score >= 65 %}Moderate{% else %}Exploratory{% endif %}{% endif %}
+
+{% endif %}
+WHY IT MATTERS:
+{% if item.why_it_matters %}{{ item.why_it_matters[:400] }}{% if item.why_it_matters|length > 400 %}...{% endif %}{% elif item.summary %}{{ item.summary[:400] }}{% if item.summary|length > 400 %}...{% endif %}{% else %}This publication was identified as relevant to cancer early detection research.{% endif %}
+
+
+{% if item.key_findings %}
+KEY TAKEAWAYS:
+{% for finding in item.key_findings[:3] %}
+  * {{ finding[:250] }}{% if finding|length > 250 %}...{% endif %}
+
+{% endfor %}
+{% endif %}
+{% if item.commercial_signals %}
+{% set signals = item.commercial_signals %}
+{% if signals.peer_reviewed is defined or signals.study_type is defined %}
+Study details: {% if signals.peer_reviewed %}Peer-reviewed{% elif signals.preprint %}Preprint{% endif %}{% if signals.study_type %} | {{ signals.study_type }}{% endif %}{% if signals.human_cohort %} | Human cohort{% endif %}{% if signals.multicenter %} | Multicenter{% endif %}
+
+{% endif %}
+{% endif %}
+{% endfor %}
+{% if honorable_mentions %}
+================================================================================
+HONORABLE MENTIONS
+================================================================================
+
+{% for item in honorable_mentions %}
+* {{ item.title }}
+  {{ item.source }} | {% if item.published_date %}{{ item.published_date[:10] if item.published_date is string else item.published_date.strftime('%Y-%m-%d') }}{% endif %}{% if item.relevancy_ordinal %} | Relevancy: {{ item.relevancy_ordinal }}{% elif item.relevancy_score is not none %} | Relevancy: {% if item.relevancy_score >= 80 %}High{% elif item.relevancy_score >= 65 %}Moderate{% else %}Exploratory{% endif %}{% endif %}
+
+  {% if item.link %}{{ item.link }}{% endif %}
+
+{% endfor %}
+{% endif %}
+================================================================================
+METHODOLOGY
+================================================================================
+
+Publications are ranked by relevance to SpotItEarly's early detection mission.
+Evidence strength is shown to help interpret reliability.
+
+--------------------------------------------------------------------------------
+FEEDBACK
+--------------------------------------------------------------------------------
+
+{% if feedback_enabled %}
+Use the per-paper 👍 / 👎 links above to share relevance feedback.
+{% else %}
+Reply to this email with a rating (0-3) for how useful this digest was:
+
+  0 = Not useful
+  1 = Somewhat useful
+  2 = Useful
+  3 = Very useful
+{% endif %}
+
+================================================================================

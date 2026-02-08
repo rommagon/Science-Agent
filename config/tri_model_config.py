@@ -8,9 +8,9 @@ This module provides configuration for the experimental tri-model review system:
 Environment Variables:
 - TRI_MODEL_MINI_DAILY: Enable tri-model mini-daily run (default: false)
 - CLAUDE_API_KEY: Anthropic Claude API key
-- CLAUDE_MODEL: Claude model name (default: claude-3-5-haiku-20241022)
+- CLAUDE_MODEL: Claude model name (default: claude-3-haiku-20240307)
 - GEMINI_API_KEY: Google Gemini API key
-- GEMINI_MODEL: Gemini model name (default: gemini-2.0-flash-exp)
+- GEMINI_MODEL: Gemini model name (default: gemini-2.0-flash)
 - MINI_DAILY_WINDOW_HOURS: Lookback window in hours (default: 6)
 - MINI_DAILY_MAX_PAPERS: Maximum papers to review (default: 10)
 """
@@ -82,17 +82,22 @@ CLAUDE_API_KEY = sanitize_secret(os.getenv("CLAUDE_API_KEY"))
 GEMINI_API_KEY = sanitize_secret(os.getenv("GEMINI_API_KEY"))
 
 # Model names
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-3-5-haiku-20241022")  # Haiku 3.5 for cost savings
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-3-haiku-20240307")  # Haiku for cost savings
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # Mini-daily parameters
 MINI_DAILY_WINDOW_HOURS = int(os.getenv("MINI_DAILY_WINDOW_HOURS", "6"))
 MINI_DAILY_MAX_PAPERS = int(os.getenv("MINI_DAILY_MAX_PAPERS", "10"))
 
-# Prompt versions
-CLAUDE_REVIEW_VERSION = "v1"
-GEMINI_REVIEW_VERSION = "v1"
-GPT_EVALUATOR_VERSION = "v1"
+# Prompt versions (v2 is frozen production baseline; changes require v3)
+TRI_MODEL_PROMPT_VERSION = os.getenv("TRI_MODEL_PROMPT_VERSION", "v2")
+CLAUDE_REVIEW_VERSION = TRI_MODEL_PROMPT_VERSION
+GEMINI_REVIEW_VERSION = TRI_MODEL_PROMPT_VERSION
+GPT_EVALUATOR_VERSION = TRI_MODEL_PROMPT_VERSION
+if TRI_MODEL_PROMPT_VERSION == "v3":
+    RELEVANCY_RUBRIC_VERSION = "relevancy_rubric_v3_2"
+else:
+    RELEVANCY_RUBRIC_VERSION = "relevancy_rubric_v2"
 
 # Timeouts and retries
 REVIEW_TIMEOUT_SECONDS = 30

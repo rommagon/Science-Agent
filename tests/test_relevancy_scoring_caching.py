@@ -27,7 +27,7 @@ class TestRelevancyScoringCaching(unittest.TestCase):
     @patch('mcp_server.llm_relevancy._get_api_key')
     def test_single_scoring_per_publication(self, mock_get_api_key, mock_call_llm):
         """Test that LLM is called only once per publication per run."""
-        from mcp_server.llm_relevancy import score_relevancy, clear_run_cache
+        from mcp_server.llm_relevancy import score_relevancy, clear_run_cache, SCORING_VERSION
 
         # Clear cache before test
         clear_run_cache()
@@ -58,7 +58,7 @@ class TestRelevancyScoringCaching(unittest.TestCase):
 
         # Verify LLM was called once
         self.assertEqual(mock_call_llm.call_count, 1)
-        self.assertEqual(result1["relevancy_score"], 85)
+        self.assertEqual(result1["relevancy_score"], 89)
         self.assertEqual(result1["confidence"], "high")
 
         # Second call with same run_id and pub_id: should use cache
@@ -71,12 +71,12 @@ class TestRelevancyScoringCaching(unittest.TestCase):
 
         # Verify LLM was NOT called again
         self.assertEqual(mock_call_llm.call_count, 1, "LLM should not be called again for cached item")
-        self.assertEqual(result2["relevancy_score"], 85)
+        self.assertEqual(result2["relevancy_score"], 89)
         self.assertEqual(result2["confidence"], "high")
 
         # Third call without run_id but with item cache: should still use cache
-        self.test_item["scoring_version"] = "poc_v2"
-        self.test_item["relevancy_score"] = 85
+        self.test_item["scoring_version"] = SCORING_VERSION
+        self.test_item["relevancy_score"] = 89
         self.test_item["relevancy_reason"] = result1["relevancy_reason"]
         self.test_item["confidence"] = "high"
         self.test_item["signals"] = result1["signals"]
@@ -90,7 +90,7 @@ class TestRelevancyScoringCaching(unittest.TestCase):
 
         # Verify LLM was still NOT called
         self.assertEqual(mock_call_llm.call_count, 1, "LLM should not be called for item with cached scores")
-        self.assertEqual(result3["relevancy_score"], 85)
+        self.assertEqual(result3["relevancy_score"], 89)
 
     @patch('mcp_server.llm_relevancy._call_llm')
     @patch('mcp_server.llm_relevancy._get_api_key')
@@ -121,7 +121,7 @@ class TestRelevancyScoringCaching(unittest.TestCase):
         )
 
         self.assertEqual(mock_call_llm.call_count, 1)
-        self.assertEqual(result1["relevancy_score"], 85)
+        self.assertEqual(result1["relevancy_score"], 89)
 
         # Score same item for run_id_2 (different run): should call LLM again
         result2 = score_relevancy(
@@ -135,7 +135,7 @@ class TestRelevancyScoringCaching(unittest.TestCase):
         # This test documents the behavior that run caches are isolated,
         # but item-level caching takes precedence.
         # For true run isolation, we'd need to clear item cache between runs.
-        self.assertEqual(result2["relevancy_score"], 85)
+        self.assertEqual(result2["relevancy_score"], 89)
 
     @patch('mcp_server.llm_relevancy._call_llm')
     @patch('mcp_server.llm_relevancy._get_api_key')
@@ -175,7 +175,8 @@ class TestRelevancyScoringCaching(unittest.TestCase):
 
         # Verify LLM was called
         self.assertEqual(mock_call_llm.call_count, 1)
-        self.assertEqual(result["relevancy_score"], 75)
+        # V3 normalization compresses mid-high scores (70-84 => minus 5).
+        self.assertEqual(result["relevancy_score"], 70)
         self.assertEqual(result["confidence"], "medium")
 
 

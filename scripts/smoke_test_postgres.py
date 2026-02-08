@@ -150,7 +150,7 @@ def main():
             published_date="2026-01-22",
             claude_review={"score": 80},
             gemini_review={"score": 90},
-            gpt_eval={"final_score": 85},
+            gpt_eval={"final_relevancy_score": 85},
             final_relevancy_score=85,
             final_relevancy_reason="Test tri-model scoring",
             final_signals={"test": True},

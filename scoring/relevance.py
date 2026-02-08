@@ -6,7 +6,7 @@ to maintain backward compatibility with the scoring.relevance import path.
 
 import logging
 import os
-from typing import Dict
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
