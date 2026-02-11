@@ -79,6 +79,7 @@ jobs:
 
           CMD="$CMD --lookback-hours ${{ inputs.lookback_hours || '48' }}"
           CMD="$CMD --prompt-version ${{ inputs.prompt_version || 'v3' }}"
+          CMD="$CMD --enable-gating"
 
           # Add backend ingestion flag if enabled (default true for scheduled runs)
           if [ "${{ inputs.ingest }}" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then

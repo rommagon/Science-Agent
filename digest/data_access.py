@@ -521,12 +521,17 @@ def _process_publications(
             except (json.JSONDecodeError, TypeError):
                 gemini_review = {}
 
-        # Get scores (try direct columns first, then gpt_eval_json)
-        relevancy = (
-            pub.get("relevancy_score") or
-            must_read.get("final_relevancy_score") or
-            tri_model.get("final_relevancy_score") or
-            gpt_eval.get("final_relevancy_score")
+        # Get scores: tri-model scores take priority over base publication scores
+        # (base publication score may be stale from an older rubric version)
+        # Use `is not None` checks instead of `or` to handle score=0 correctly
+        relevancy = next(
+            (s for s in [
+                tri_model.get("final_relevancy_score"),
+                gpt_eval.get("final_relevancy_score"),
+                must_read.get("final_relevancy_score"),
+                pub.get("relevancy_score"),
+            ] if s is not None),
+            None,
         )
 
         credibility = (
@@ -678,10 +683,13 @@ def _process_publications(
 
     scoring_method = "relevancy_only"
 
+    # Count only publications that were actually scored (have a relevancy_score)
+    total_scored = sum(1 for p in scored_pubs if p.get("relevancy_score") is not None)
+
     result = {
         "must_reads": must_reads,
         "honorable_mentions": mentions,
-        "total_candidates": len(publications),
+        "total_candidates": total_scored,
         "scoring_method": scoring_method,
         "week_start": week_start.isoformat(),
         "week_end": week_end.isoformat(),

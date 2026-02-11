@@ -201,6 +201,7 @@ def review_paper_with_tri_model(
         "title": paper.get("title"),
         "source": paper.get("source"),
         "published_date": paper.get("date"),
+        "url": paper.get("url"),
         "claude_review": claude_result,
         "gemini_review": gemini_result,
         "gpt_evaluation": gpt_result,
@@ -246,6 +247,7 @@ def write_must_reads(
                 "title": paper["title"],
                 "source": paper["source"],
                 "published_date": paper.get("published_date"),
+                "url": paper.get("url"),
                 "final_relevancy_score": paper["gpt_evaluation"]["evaluation"]["final_relevancy_score"],
                 "final_relevancy_reason": paper["gpt_evaluation"]["evaluation"]["final_relevancy_reason"],
                 "final_summary": paper["gpt_evaluation"]["evaluation"]["final_summary"],
@@ -669,13 +671,13 @@ def main() -> None:
 
         run_id = f"tri-model-daily-{run_date.strftime('%Y-%m-%d')}"
 
-        # Compute midnight-anchored window
-        window_end = run_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Compute window: end at current time, look back N hours
+        window_end = run_date
         window_start = window_end - timedelta(hours=args.lookback_hours)
         since_date = window_start
-        window_mode = "midnight_anchored"
+        window_mode = "rolling"
 
-        logger.info("Using midnight-anchored window (default mode)")
+        logger.info("Using rolling window (end=now, lookback=%dh)", args.lookback_hours)
 
     logger.info(
         "TRI-MODEL DAILY MODE: run_id=%s, lookback=%dh, window=%s to %s",
