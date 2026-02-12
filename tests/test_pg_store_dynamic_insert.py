@@ -17,7 +17,8 @@ def test_build_insert_uses_publication_id_pk_and_existing_columns():
     assert "publication_id" in insert_cols
     assert "published_date" in insert_cols
     assert "published_at" not in insert_cols
-    assert "ON CONFLICT (publication_id) DO NOTHING" in sql
+    assert "ON CONFLICT (publication_id) DO UPDATE SET" in sql
+    assert "COALESCE(EXCLUDED.url, publications.url)" in sql
 
 
 def test_build_insert_skips_missing_optional_columns():
@@ -27,6 +28,7 @@ def test_build_insert_skips_missing_optional_columns():
     assert insert_cols == ["id", "title", "source"]
     assert "canonical_url" not in insert_cols
     assert "doi" not in insert_cols
+    # No URL-related columns present, so falls back to DO NOTHING
     assert "ON CONFLICT (id) DO NOTHING" in sql
 
 

@@ -115,10 +115,28 @@ def _build_publications_insert_statement(
     column_list = ", ".join(insert_columns)
 
     if pk_column and pk_column in table_columns:
-        sql = (
-            f"INSERT INTO publications ({column_list}) VALUES ({placeholders}) "
-            f"ON CONFLICT ({pk_column}) DO NOTHING"
-        )
+        # On conflict, update URL-related fields so existing publications
+        # get their links populated even if they were inserted before these
+        # columns existed.  COALESCE(EXCLUDED.x, publications.x) ensures we
+        # never overwrite a good value with NULL.
+        upsert_fields = [
+            c for c in ["url", "canonical_url", "doi", "pmid", "source_type"]
+            if c in table_columns and c in insert_columns
+        ]
+        if upsert_fields:
+            update_set = ", ".join(
+                f"{c} = COALESCE(EXCLUDED.{c}, publications.{c})"
+                for c in upsert_fields
+            )
+            sql = (
+                f"INSERT INTO publications ({column_list}) VALUES ({placeholders}) "
+                f"ON CONFLICT ({pk_column}) DO UPDATE SET {update_set}"
+            )
+        else:
+            sql = (
+                f"INSERT INTO publications ({column_list}) VALUES ({placeholders}) "
+                f"ON CONFLICT ({pk_column}) DO NOTHING"
+            )
     else:
         sql = f"INSERT INTO publications ({column_list}) VALUES ({placeholders})"
 
@@ -1150,8 +1168,12 @@ def update_publication_canonical_url(
 
         values.append(publication_id)
 
+        # Use dynamically-detected PK column instead of hardcoding
+        # "publication_id" (the table may use "id" or "pub_id" instead).
+        pk_col = _get_publications_table_metadata(conn, database_url)[1] or "publication_id"
+
         cursor.execute(
-            f"UPDATE publications SET {', '.join(fields)} WHERE publication_id = %s",
+            f"UPDATE publications SET {', '.join(fields)} WHERE {pk_col} = %s",
             values
         )
 
