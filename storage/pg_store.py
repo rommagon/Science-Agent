@@ -824,6 +824,7 @@ def store_tri_model_scoring_event(
     credibility_reason: Optional[str] = None,
     credibility_confidence: Optional[str] = None,
     credibility_signals: Optional[Dict] = None,
+    url: Optional[str] = None,
     database_url: str = None,
 ) -> dict:
     """Store a tri-model scoring event (schema-tolerant).
@@ -858,6 +859,7 @@ def store_tri_model_scoring_event(
         credibility_reason: Credibility reason (optional)
         credibility_confidence: Credibility confidence (optional)
         credibility_signals: Credibility signals (optional)
+        url: Publication URL (optional)
         database_url: PostgreSQL connection URL
 
     Returns:
@@ -902,6 +904,12 @@ def store_tri_model_scoring_event(
             "claude_latency_ms": claude_latency_ms,
             "gemini_latency_ms": gemini_latency_ms,
             "gpt_latency_ms": gpt_latency_ms,
+            # URL and credibility fields (added in migration 002)
+            "url": url,
+            "credibility_score": credibility_score,
+            "credibility_reason": credibility_reason,
+            "credibility_confidence": credibility_confidence,
+            "credibility_signals_json": json.dumps(credibility_signals, ensure_ascii=False) if credibility_signals else None,
         }
 
         # Filter to only columns that exist in the table
@@ -1011,6 +1019,7 @@ def export_tri_model_events_to_jsonl(
             ("title", False),
             ("source", False),
             ("published_date", False),
+            ("url", False),
             ("claude_review_json", True),
             ("gemini_review_json", True),
             ("gpt_eval_json", True),
@@ -1027,35 +1036,67 @@ def export_tri_model_events_to_jsonl(
             ("claude_latency_ms", False),
             ("gemini_latency_ms", False),
             ("gpt_latency_ms", False),
+            ("credibility_score", False),
+            ("credibility_reason", False),
+            ("credibility_confidence", False),
+            ("credibility_signals_json", True),
             ("created_at", False),
         ]
 
-        # Filter to only columns that exist
-        select_columns = []
+        # Detect which columns exist in the publications table so we can
+        # LEFT JOIN for fallback values (url, published_date, etc.)
+        pub_columns = _get_available_columns(conn, "publications", True)
+        # Detect the PK column in publications for the JOIN condition
+        pub_pk = None
+        for candidate in ("publication_id", "id", "pub_id"):
+            if candidate in pub_columns:
+                pub_pk = candidate
+                break
+
+        # Columns where we COALESCE from the publications table as fallback
+        coalesce_map = {}  # event_col -> (pub_col, pub_col_exists)
+        if pub_pk:
+            for event_col, pub_col in [("url", "url"), ("published_date", "published_date")]:
+                if pub_col in pub_columns:
+                    coalesce_map[event_col] = pub_col
+
+        # Output key mapping for _json suffixed columns
+        json_key_map = {
+            "final_signals_json": "final_signals",
+            "prompt_versions_json": "prompt_versions",
+            "model_names_json": "model_names",
+            "claude_review_json": "claude_review",
+            "gemini_review_json": "gemini_review",
+            "gpt_eval_json": "gpt_eval",
+            "credibility_signals_json": "credibility_signals",
+        }
+
+        # Filter to only columns that exist in the events table
+        select_expressions = []
         column_meta = []  # (output_key, is_json, is_datetime)
         for col, is_json in desired_columns:
             if col in available_columns:
-                select_columns.append(col)
-                # Map JSON column names to cleaner output keys
-                output_key = col.replace("_json", "").replace("claude_review", "claude_review").replace("gemini_review", "gemini_review").replace("gpt_eval", "gpt_eval")
-                if col == "final_signals_json":
-                    output_key = "final_signals"
-                elif col == "prompt_versions_json":
-                    output_key = "prompt_versions"
-                elif col == "model_names_json":
-                    output_key = "model_names"
-                elif col == "claude_review_json":
-                    output_key = "claude_review"
-                elif col == "gemini_review_json":
-                    output_key = "gemini_review"
-                elif col == "gpt_eval_json":
-                    output_key = "gpt_eval"
+                # Use COALESCE with publications fallback where applicable
+                if col in coalesce_map:
+                    pub_col = coalesce_map[col]
+                    select_expressions.append(
+                        f"COALESCE(e.{col}, p.{pub_col}) AS {col}"
+                    )
                 else:
-                    output_key = col
+                    select_expressions.append(f"e.{col}")
+                output_key = json_key_map.get(col, col)
+                is_datetime = col == "created_at"
+                column_meta.append((output_key, is_json, is_datetime))
+            elif col in coalesce_map:
+                # Column doesn't exist in events table yet, but we can
+                # still pull it from publications as a pure fallback
+                pub_col = coalesce_map[col]
+                select_expressions.append(f"p.{pub_col} AS {col}")
+                output_key = json_key_map.get(col, col)
                 is_datetime = col == "created_at"
                 column_meta.append((output_key, is_json, is_datetime))
 
-        if not select_columns:
+        if not select_expressions:
             logger.warning("No columns available for export")
             return {
                 "success": False,
@@ -1065,13 +1106,24 @@ def export_tri_model_events_to_jsonl(
             }
 
         cursor = conn.cursor()
-        col_list = ", ".join(select_columns)
-        cursor.execute(f"""
-            SELECT {col_list}
-            FROM tri_model_events
-            WHERE run_id = %s
-            ORDER BY created_at ASC
-        """, (run_id,))
+        col_list = ", ".join(select_expressions)
+
+        # LEFT JOIN with publications for fallback values
+        if pub_pk and coalesce_map:
+            cursor.execute(f"""
+                SELECT {col_list}
+                FROM tri_model_events e
+                LEFT JOIN publications p ON e.publication_id = p.{pub_pk}
+                WHERE e.run_id = %s
+                ORDER BY e.created_at ASC
+            """, (run_id,))
+        else:
+            cursor.execute(f"""
+                SELECT {col_list}
+                FROM tri_model_events e
+                WHERE e.run_id = %s
+                ORDER BY e.created_at ASC
+            """, (run_id,))
 
         # Ensure output directory exists
         output_file = Path(output_path)

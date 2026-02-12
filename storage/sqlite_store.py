@@ -1129,6 +1129,7 @@ def store_tri_model_scoring_event(
     credibility_reason: Optional[str] = None,
     credibility_confidence: Optional[str] = None,
     credibility_signals: Optional[Dict] = None,
+    url: Optional[str] = None,
     db_path: str = DEFAULT_DB_PATH,
     database_url: Optional[str] = None,  # For backwards compatibility
 ) -> dict:

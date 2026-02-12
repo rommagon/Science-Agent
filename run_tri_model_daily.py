@@ -1116,6 +1116,7 @@ def main() -> None:
                 credibility_reason=cred_data.get("credibility_reason"),
                 credibility_confidence=cred_data.get("credibility_confidence"),
                 credibility_signals=cred_data.get("credibility_signals"),
+                url=paper.get("url"),
                 database_url=database_url,
             )
         else:
@@ -1146,6 +1147,7 @@ def main() -> None:
                 credibility_reason=cred_data.get("credibility_reason"),
                 credibility_confidence=cred_data.get("credibility_confidence"),
                 credibility_signals=cred_data.get("credibility_signals"),
+                url=paper.get("url"),
                 db_path=db_path,
             )
 
