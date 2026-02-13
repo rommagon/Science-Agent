@@ -80,6 +80,28 @@ def _get_publications_table_metadata(conn, database_url: str) -> Tuple[set, str,
     return columns, pk_column, force_python_created_at, force_python_updated_at
 
 
+def _get_available_columns(conn, table_name: str, is_pg: bool = True) -> set:
+    """Get set of column names for a table.
+
+    Args:
+        conn: Database connection
+        table_name: Name of the table
+        is_pg: Whether this is PostgreSQL (always True in pg_store)
+
+    Returns:
+        Set of column name strings
+    """
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+    """, (table_name,))
+    columns = {row[0] for row in cursor.fetchall()}
+    cursor.close()
+    return columns
+
+
 def _build_publications_insert_statement(
     table_columns: set,
     pk_column: str,
@@ -1146,7 +1168,7 @@ def export_tri_model_events_to_jsonl(
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
                 events_exported += 1
 
-        logger.info("Exported %d tri-model events to %s (cols=%d)", events_exported, output_path, len(select_columns))
+        logger.info("Exported %d tri-model events to %s (cols=%d)", events_exported, output_path, len(column_meta))
 
         return {
             "success": True,
@@ -1163,6 +1185,148 @@ def export_tri_model_events_to_jsonl(
             "output_path": output_path,
             "error": str(e),
         }
+    finally:
+        if conn:
+            cursor.close()
+            _put_connection(conn)
+
+
+def update_publication_scoring(
+    publication_id: str,
+    final_relevancy_score: int,
+    final_relevancy_reason: str,
+    final_summary: str,
+    agreement_level: str,
+    confidence: str,
+    credibility_score: Optional[int] = None,
+    credibility_reason: Optional[str] = None,
+    credibility_confidence: Optional[str] = None,
+    credibility_signals: Optional[Dict] = None,
+    claude_score: Optional[int] = None,
+    gemini_score: Optional[int] = None,
+    evaluator_rationale: Optional[str] = None,
+    disagreements=None,
+    final_signals: Optional[Dict] = None,
+    scoring_run_id: Optional[str] = None,
+    database_url: str = None,
+) -> dict:
+    """Write scoring results directly to the publications row.
+
+    This makes publications the single source of truth for scoring data.
+    Schema-tolerant: only updates columns that exist in the table.
+
+    Args:
+        publication_id: Publication ID to update
+        final_relevancy_score: Final tri-model score (0-100)
+        final_relevancy_reason: Reason for the score
+        final_summary: Synthesized summary
+        agreement_level: Reviewer agreement (high/moderate/low)
+        confidence: Confidence level
+        credibility_score: Credibility score (0-100)
+        credibility_reason: Credibility rationale
+        credibility_confidence: Credibility confidence (low/medium/high)
+        credibility_signals: Credibility signals dict
+        claude_score: Individual Claude reviewer score
+        gemini_score: Individual Gemini reviewer score
+        evaluator_rationale: GPT evaluator rationale
+        disagreements: Reviewer disagreements (str, list, or dict)
+        final_signals: Final signals dict
+        scoring_run_id: Which run produced these scores
+        database_url: PostgreSQL connection URL
+
+    Returns:
+        Dictionary with update result
+    """
+    conn = None
+    try:
+        conn = _get_connection(database_url)
+
+        # Get table metadata (columns + PK)
+        table_columns, pk_column, _, _ = _get_publications_table_metadata(conn, database_url)
+        pk_col = pk_column or "publication_id"
+
+        # Normalize disagreements
+        if isinstance(disagreements, (list, dict)):
+            disagreements_str = json.dumps(disagreements, ensure_ascii=False)
+        elif disagreements is None:
+            disagreements_str = None
+        else:
+            disagreements_str = str(disagreements)
+
+        # Build column -> value mapping for all scoring columns
+        all_updates = {
+            "final_relevancy_score": final_relevancy_score,
+            "final_relevancy_reason": final_relevancy_reason,
+            "final_summary": final_summary,
+            "agreement_level": agreement_level,
+            "confidence": confidence,
+            "credibility_score": credibility_score,
+            "credibility_reason": credibility_reason,
+            "credibility_confidence": credibility_confidence,
+            "credibility_signals_json": json.dumps(credibility_signals, ensure_ascii=False) if credibility_signals else None,
+            "claude_score": claude_score,
+            "gemini_score": gemini_score,
+            "evaluator_rationale": evaluator_rationale,
+            "disagreements": disagreements_str,
+            "final_signals_json": json.dumps(final_signals, ensure_ascii=False) if final_signals else None,
+            "scoring_run_id": scoring_run_id,
+        }
+
+        # Filter to only columns that exist in the table
+        update_pairs = {k: v for k, v in all_updates.items() if k in table_columns}
+
+        if not update_pairs:
+            logger.warning(
+                "No scoring columns found in publications table for update (pub_id=%s). "
+                "Run Alembic migration 003 to add scoring columns.",
+                publication_id[:16],
+            )
+            return {"success": True, "updated": False, "error": None}
+
+        # Add scoring_updated_at if column exists
+        if "scoring_updated_at" in table_columns:
+            update_pairs["scoring_updated_at"] = None  # placeholder, use NOW() in SQL
+
+        # Build SET clause
+        set_parts = []
+        values = []
+        for col, val in update_pairs.items():
+            if col == "scoring_updated_at":
+                set_parts.append(f"{col} = NOW()")
+            else:
+                set_parts.append(f"{col} = %s")
+                values.append(val)
+
+        values.append(publication_id)
+
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE publications SET {', '.join(set_parts)} WHERE {pk_col} = %s",
+            values,
+        )
+        updated = cursor.rowcount > 0
+        conn.commit()
+
+        if updated:
+            logger.debug(
+                "Updated publication scoring: pub_id=%s, score=%s (cols=%d)",
+                publication_id[:16],
+                final_relevancy_score,
+                len(update_pairs),
+            )
+        else:
+            logger.debug(
+                "No publication row found to update: pub_id=%s",
+                publication_id[:16],
+            )
+
+        return {"success": True, "updated": updated, "error": None}
+
+    except Exception as e:
+        logger.warning("Failed to update publication scoring: %s", e)
+        if conn:
+            conn.rollback()
+        return {"success": False, "updated": False, "error": str(e)}
     finally:
         if conn:
             cursor.close()

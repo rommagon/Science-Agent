@@ -108,6 +108,22 @@ def _generate_fallback_why_it_matters(pub: Dict) -> str:
     return "This publication was identified as potentially relevant to cancer early detection research."
 
 
+def _parse_credibility_signals(pub: Dict, must_read: Dict) -> Dict:
+    """Parse credibility signals, preferring centralized data from pub."""
+    # Try centralized column first
+    signals = pub.get("credibility_signals_json")
+    if signals:
+        if isinstance(signals, str):
+            try:
+                return json.loads(signals)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return signals if isinstance(signals, dict) else {}
+
+    # Fall back to must_read enrichment
+    return must_read.get("credibility_signals", {})
+
+
 def get_database_url() -> Optional[str]:
     """Get database URL from environment."""
     return os.environ.get("DATABASE_URL")
@@ -252,9 +268,17 @@ def _get_publications_postgres(
         # Optional columns with safe fallbacks
         optional_cols = [
             "canonical_url", "url", "doi", "pmid", "venue", "authors",
-            "latest_relevancy_score as relevancy_score",
-            "latest_credibility_score as credibility_score",
-            "summary", "raw_text", "source_type"
+            "summary", "raw_text", "source_type",
+            # Centralized scoring columns (from migration 003)
+            "final_relevancy_score", "final_relevancy_reason", "final_summary",
+            "agreement_level", "confidence",
+            "credibility_score", "credibility_reason", "credibility_confidence",
+            "credibility_signals_json", "claude_score", "gemini_score",
+            "evaluator_rationale", "disagreements", "final_signals_json",
+            "scoring_run_id",
+            # Legacy columns (older schemas without centralized scoring)
+            "latest_relevancy_score as relevancy_score_legacy",
+            "latest_credibility_score as credibility_score_legacy",
         ]
 
         for col in optional_cols:
@@ -276,15 +300,24 @@ def _get_publications_postgres(
         cursor.execute(query, (week_start, week_end))
         rows = cursor.fetchall()
 
-        # Also try to get must_reads data for the week if available
-        must_reads_data = _get_must_reads_for_period_postgres(
-            conn, week_start, week_end
-        )
+        # Check if centralized scoring columns are available
+        has_centralized_scoring = "final_relevancy_score" in pub_columns
 
-        # Also get tri_model_events data for enrichment
-        tri_model_data = _get_tri_model_data_postgres(
-            conn, week_start, week_end
-        )
+        # Only fall back to tri_model/must_reads enrichment if centralized
+        # scoring columns are not yet populated on publications
+        if has_centralized_scoring:
+            must_reads_data = {}
+            tri_model_data = {}
+            logger.info("Using centralized scoring from publications table")
+        else:
+            # Legacy path: enrich from separate tables
+            must_reads_data = _get_must_reads_for_period_postgres(
+                conn, week_start, week_end
+            )
+            tri_model_data = _get_tri_model_data_postgres(
+                conn, week_start, week_end
+            )
+            logger.info("Using legacy enrichment from tri_model_events + must_reads")
 
         cursor.close()
 
@@ -436,9 +469,16 @@ def _get_publications_sqlite(
         # Optional columns
         optional_cols = [
             "canonical_url", "url", "doi", "pmid", "venue", "authors",
-            "relevance_score as relevancy_score",
-            "credibility_score",
-            "summary", "raw_text", "source_type"
+            "summary", "raw_text", "source_type",
+            # Centralized scoring columns (from migration v9)
+            "final_relevancy_score", "final_relevancy_reason", "final_summary",
+            "agreement_level", "confidence",
+            "credibility_score", "credibility_reason", "credibility_confidence",
+            "credibility_signals_json", "claude_score", "gemini_score",
+            "evaluator_rationale", "disagreements", "final_signals_json",
+            "scoring_run_id",
+            # Legacy columns
+            "relevance_score as relevancy_score_legacy",
         ]
 
         for col in optional_cols:
@@ -463,7 +503,7 @@ def _get_publications_sqlite(
 
         return _process_publications(
             rows, week_start, week_end, top_n, honorable_mentions,
-            {}, {},  # No must_reads or tri_model enrichment for SQLite yet
+            {}, {},  # No legacy enrichment needed for SQLite
             debug_ranking
         )
 
@@ -494,66 +534,70 @@ def _process_publications(
     for pub in publications:
         pub_id = pub.get("id")
 
-        # Enrich from must_reads data
+        # Enrich from must_reads / tri_model data (legacy fallback)
         must_read = must_reads_data.get(pub_id, {})
         tri_model = tri_model_data.get(pub_id, {})
 
-        # Extract data from gpt_eval_json if available (PostgreSQL stores rich data there)
-        gpt_eval = tri_model.get("gpt_eval_json") or {}
-        if isinstance(gpt_eval, str):
-            try:
-                gpt_eval = json.loads(gpt_eval)
-            except (json.JSONDecodeError, TypeError):
-                gpt_eval = {}
+        # --- Scoring: prefer centralized columns on publications row ---
+        # If the publications table has final_relevancy_score populated,
+        # use it directly. Otherwise fall back to legacy enrichment.
+        relevancy = pub.get("final_relevancy_score")
 
-        # Also check claude_review_json and gemini_review_json for scores
-        claude_review = tri_model.get("claude_review_json") or {}
-        if isinstance(claude_review, str):
-            try:
-                claude_review = json.loads(claude_review)
-            except (json.JSONDecodeError, TypeError):
-                claude_review = {}
+        if relevancy is None:
+            # Legacy fallback: try tri_model_events or must_reads enrichment
+            gpt_eval = tri_model.get("gpt_eval_json") or {}
+            if isinstance(gpt_eval, str):
+                try:
+                    gpt_eval = json.loads(gpt_eval)
+                except (json.JSONDecodeError, TypeError):
+                    gpt_eval = {}
 
-        gemini_review = tri_model.get("gemini_review_json") or {}
-        if isinstance(gemini_review, str):
-            try:
-                gemini_review = json.loads(gemini_review)
-            except (json.JSONDecodeError, TypeError):
-                gemini_review = {}
+            relevancy = next(
+                (s for s in [
+                    tri_model.get("final_relevancy_score"),
+                    gpt_eval.get("final_relevancy_score"),
+                    must_read.get("final_relevancy_score"),
+                    pub.get("relevancy_score_legacy"),
+                    pub.get("relevancy_score"),
+                ] if s is not None),
+                None,
+            )
+        else:
+            gpt_eval = {}
 
-        # Get scores: tri-model scores take priority over base publication scores
-        # (base publication score may be stale from an older rubric version)
-        # Use `is not None` checks instead of `or` to handle score=0 correctly
-        relevancy = next(
-            (s for s in [
-                tri_model.get("final_relevancy_score"),
-                gpt_eval.get("final_relevancy_score"),
-                must_read.get("final_relevancy_score"),
-                pub.get("relevancy_score"),
-            ] if s is not None),
-            None,
-        )
+        credibility = pub.get("credibility_score") or must_read.get("credibility_score")
 
-        credibility = (
-            pub.get("credibility_score") or
-            must_read.get("credibility_score")
-        )
+        # Individual reviewer scores: prefer centralized, fall back to JSON parsing
+        claude_score = pub.get("claude_score")
+        gemini_score = pub.get("gemini_score")
 
-        # Get claude and gemini scores for display
-        claude_score = None
-        gemini_score = None
-        if claude_review and claude_review.get("review"):
-            claude_score = claude_review.get("review", {}).get("relevancy_score")
-        elif claude_review:
-            claude_score = claude_review.get("relevancy_score")
+        if claude_score is None and tri_model:
+            claude_review = tri_model.get("claude_review_json") or {}
+            if isinstance(claude_review, str):
+                try:
+                    claude_review = json.loads(claude_review)
+                except (json.JSONDecodeError, TypeError):
+                    claude_review = {}
+            if claude_review.get("review"):
+                claude_score = claude_review.get("review", {}).get("relevancy_score")
+            elif claude_review:
+                claude_score = claude_review.get("relevancy_score")
 
-        if gemini_review and gemini_review.get("review"):
-            gemini_score = gemini_review.get("review", {}).get("relevancy_score")
-        elif gemini_review:
-            gemini_score = gemini_review.get("relevancy_score")
+        if gemini_score is None and tri_model:
+            gemini_review = tri_model.get("gemini_review_json") or {}
+            if isinstance(gemini_review, str):
+                try:
+                    gemini_review = json.loads(gemini_review)
+                except (json.JSONDecodeError, TypeError):
+                    gemini_review = {}
+            if gemini_review.get("review"):
+                gemini_score = gemini_review.get("review", {}).get("relevancy_score")
+            elif gemini_review:
+                gemini_score = gemini_review.get("relevancy_score")
 
-        # Get and clean "why it matters" text (try direct columns, then gpt_eval_json)
+        # Why it matters: prefer centralized, fall back to legacy
         raw_why_it_matters = (
+            pub.get("final_relevancy_reason") or
             must_read.get("final_relevancy_reason") or
             tri_model.get("final_relevancy_reason") or
             gpt_eval.get("final_relevancy_reason") or
@@ -561,12 +605,12 @@ def _process_publications(
         )
         cleaned_why = _clean_why_it_matters(raw_why_it_matters)
 
-        # Generate fallback if empty
         if not cleaned_why:
             cleaned_why = _generate_fallback_why_it_matters(pub)
 
-        # Get summary (try direct columns, then gpt_eval_json)
+        # Summary: prefer centralized, fall back to legacy
         summary_text = (
+            pub.get("final_summary") or
             must_read.get("final_summary") or
             tri_model.get("final_summary") or
             gpt_eval.get("final_summary") or
@@ -574,8 +618,9 @@ def _process_publications(
             (pub.get("raw_text", "")[:500] if pub.get("raw_text") else "")
         )
 
-        # Get confidence and agreement from gpt_eval
+        # Confidence and agreement: prefer centralized
         confidence = (
+            pub.get("confidence") or
             must_read.get("confidence") or
             tri_model.get("confidence") or
             gpt_eval.get("confidence") or
@@ -583,26 +628,35 @@ def _process_publications(
         )
 
         agreement_level = (
+            pub.get("agreement_level") or
             must_read.get("agreement_level") or
             tri_model.get("agreement_level") or
             gpt_eval.get("agreement_level", "")
         )
 
-        # Get evaluator rationale and disagreements
+        # Evaluator rationale and disagreements: prefer centralized
         evaluator_rationale = (
+            pub.get("evaluator_rationale") or
             tri_model.get("evaluator_rationale") or
             gpt_eval.get("evaluator_rationale", "")
         )
 
-        disagreements = gpt_eval.get("disagreements", [])
+        disagreements = pub.get("disagreements") or gpt_eval.get("disagreements", [])
         if isinstance(disagreements, str):
             try:
                 disagreements = json.loads(disagreements)
             except:
                 disagreements = [disagreements] if disagreements else []
 
-        # Get final signals
-        final_signals = gpt_eval.get("final_signals", {})
+        # Final signals: prefer centralized
+        final_signals_raw = pub.get("final_signals_json") or gpt_eval.get("final_signals", {})
+        if isinstance(final_signals_raw, str):
+            try:
+                final_signals = json.loads(final_signals_raw)
+            except (json.JSONDecodeError, TypeError):
+                final_signals = {}
+        else:
+            final_signals = final_signals_raw if final_signals_raw else {}
 
         # Build enriched publication
         enriched = {
@@ -629,10 +683,10 @@ def _process_publications(
             "summary": summary_text,
             "why_it_matters": cleaned_why,
             "key_findings": _extract_key_findings(must_read, tri_model, pub),
-            "commercial_signals": must_read.get("credibility_signals", {}),
+            "commercial_signals": _parse_credibility_signals(pub, must_read),
             "confidence": confidence,
             "agreement_level": agreement_level,
-            "credibility_reason": must_read.get("credibility_reason", ""),
+            "credibility_reason": pub.get("credibility_reason") or must_read.get("credibility_reason", ""),
             # Additional tri-model details
             "evaluator_rationale": evaluator_rationale,
             "disagreements": disagreements,

@@ -9,6 +9,7 @@ If the database fails, the pipeline continues normally with a warning.
 
 import logging
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict
 
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_PATH = "data/db/acitrack.db"
 
 # Schema version for future migrations
-SCHEMA_VERSION = 8  # Bumped for canonical_url, source_type, pmid columns and publication_embeddings table
+SCHEMA_VERSION = 9  # Bumped for scoring centralization columns on publications
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
@@ -125,6 +126,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v8(cursor)
         cursor.execute("INSERT INTO schema_version (version) VALUES (8)")
         current_version = 8
+
+    if current_version < 9:
+        logger.info("Migrating schema from version %d to 9", current_version)
+        _migrate_to_v9(cursor)
+        cursor.execute("INSERT INTO schema_version (version) VALUES (9)")
+        current_version = 9
 
     # Ensure credibility columns exist (idempotent check run on every init)
     _ensure_tri_model_credibility_columns(cursor)
@@ -489,6 +496,52 @@ def _migrate_to_v8(cursor: sqlite3.Cursor) -> None:
     """)
 
     logger.info("Schema migrated to version 8: added canonical_url, source_type, pmid columns and publication_embeddings table")
+
+
+def _migrate_to_v9(cursor: sqlite3.Cursor) -> None:
+    """Migrate database schema to version 9.
+
+    Adds scoring centralization columns to publications table so it becomes
+    the single source of truth for all publication data (metadata + scoring).
+
+    Args:
+        cursor: Database cursor
+    """
+    scoring_columns = [
+        ("final_relevancy_score", "INTEGER"),
+        ("final_relevancy_reason", "TEXT"),
+        ("final_summary", "TEXT"),
+        ("agreement_level", "TEXT"),
+        ("confidence", "TEXT"),
+        ("credibility_reason", "TEXT"),
+        ("credibility_confidence", "TEXT"),
+        ("credibility_signals_json", "TEXT"),
+        ("claude_score", "INTEGER"),
+        ("gemini_score", "INTEGER"),
+        ("evaluator_rationale", "TEXT"),
+        ("disagreements", "TEXT"),
+        ("final_signals_json", "TEXT"),
+        ("scoring_run_id", "TEXT"),
+        ("scoring_updated_at", "TIMESTAMP"),
+    ]
+
+    for col_name, col_type in scoring_columns:
+        try:
+            cursor.execute(f"ALTER TABLE publications ADD COLUMN {col_name} {col_type}")
+            logger.info("Added column '%s' to publications table", col_name)
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower():
+                logger.debug("Column '%s' already exists, skipping", col_name)
+            else:
+                raise
+
+    # Index for efficient must-reads queries
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_publications_final_relevancy_score
+        ON publications(final_relevancy_score)
+    """)
+
+    logger.info("Schema migrated to version 9: added scoring centralization columns")
 
 
 def _ensure_canonical_url_columns(cursor: sqlite3.Cursor) -> None:
@@ -1246,6 +1299,135 @@ def store_tri_model_scoring_event(
             "success": False,
             "error": str(e),
         }
+
+
+def update_publication_scoring(
+    publication_id: str,
+    final_relevancy_score: int,
+    final_relevancy_reason: str,
+    final_summary: str,
+    agreement_level: str,
+    confidence: str,
+    credibility_score: Optional[int] = None,
+    credibility_reason: Optional[str] = None,
+    credibility_confidence: Optional[str] = None,
+    credibility_signals: Optional[Dict] = None,
+    claude_score: Optional[int] = None,
+    gemini_score: Optional[int] = None,
+    evaluator_rationale: Optional[str] = None,
+    disagreements=None,
+    final_signals: Optional[Dict] = None,
+    scoring_run_id: Optional[str] = None,
+    db_path: str = DEFAULT_DB_PATH,
+    database_url: Optional[str] = None,  # For backwards compatibility
+) -> dict:
+    """Write scoring results directly to the publications row.
+
+    This makes publications the single source of truth for scoring data.
+    Schema-tolerant: only updates columns that exist in the table.
+
+    Args:
+        publication_id: Publication ID to update
+        final_relevancy_score: Final tri-model score (0-100)
+        final_relevancy_reason: Reason for the score
+        final_summary: Synthesized summary
+        agreement_level: Reviewer agreement (high/moderate/low)
+        confidence: Confidence level
+        credibility_score: Credibility score (0-100)
+        credibility_reason: Credibility rationale
+        credibility_confidence: Credibility confidence (low/medium/high)
+        credibility_signals: Credibility signals dict
+        claude_score: Individual Claude reviewer score
+        gemini_score: Individual Gemini reviewer score
+        evaluator_rationale: GPT evaluator rationale
+        disagreements: Reviewer disagreements (str, list, or dict)
+        final_signals: Final signals dict
+        scoring_run_id: Which run produced these scores
+        db_path: Path to database file
+        database_url: Ignored (for API compatibility with pg_store)
+
+    Returns:
+        Dictionary with update result
+    """
+    import json
+
+    try:
+        conn = _get_connection(db_path)
+        cursor = conn.cursor()
+
+        # Detect available columns
+        cursor.execute("PRAGMA table_info(publications)")
+        available_columns = {row[1] for row in cursor.fetchall()}
+
+        # Normalize disagreements
+        if isinstance(disagreements, (list, dict)):
+            disagreements_str = json.dumps(disagreements, ensure_ascii=False)
+        elif disagreements is None:
+            disagreements_str = None
+        else:
+            disagreements_str = str(disagreements)
+
+        # Build column -> value mapping
+        all_updates = {
+            "final_relevancy_score": final_relevancy_score,
+            "final_relevancy_reason": final_relevancy_reason,
+            "final_summary": final_summary,
+            "agreement_level": agreement_level,
+            "confidence": confidence,
+            "credibility_score": credibility_score,
+            "credibility_reason": credibility_reason,
+            "credibility_confidence": credibility_confidence,
+            "credibility_signals_json": json.dumps(credibility_signals, ensure_ascii=False) if credibility_signals else None,
+            "claude_score": claude_score,
+            "gemini_score": gemini_score,
+            "evaluator_rationale": evaluator_rationale,
+            "disagreements": disagreements_str,
+            "final_signals_json": json.dumps(final_signals, ensure_ascii=False) if final_signals else None,
+            "scoring_run_id": scoring_run_id,
+            "scoring_updated_at": datetime.utcnow().isoformat(),
+        }
+
+        # Filter to only columns that exist
+        update_pairs = {k: v for k, v in all_updates.items() if k in available_columns}
+
+        if not update_pairs:
+            logger.warning(
+                "No scoring columns found in publications table for update (pub_id=%s). "
+                "Run migration v9 to add scoring columns.",
+                publication_id[:16],
+            )
+            return {"success": True, "updated": False, "error": None}
+
+        set_clause = ", ".join(f"{col} = ?" for col in update_pairs)
+        values = list(update_pairs.values())
+        values.append(publication_id)
+
+        cursor.execute(
+            f"UPDATE publications SET {set_clause} WHERE id = ?",
+            values,
+        )
+        updated = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        if updated:
+            logger.debug(
+                "Updated publication scoring: pub_id=%s, score=%s (cols=%d)",
+                publication_id[:16],
+                final_relevancy_score,
+                len(update_pairs),
+            )
+        else:
+            logger.debug(
+                "No publication row found to update: pub_id=%s",
+                publication_id[:16],
+            )
+
+        return {"success": True, "updated": updated, "error": None}
+
+    except Exception as e:
+        logger.warning("Failed to update publication scoring: %s", e)
+        return {"success": False, "updated": False, "error": str(e)}
 
 
 def export_tri_model_events_to_jsonl(

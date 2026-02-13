@@ -1088,6 +1088,14 @@ def main() -> None:
         # Extract credibility data
         cred_data = result.get("credibility", {})
 
+        # Extract individual reviewer scores for centralized storage
+        _claude_score = None
+        _gemini_score = None
+        if result["claude_review"] and result["claude_review"].get("success"):
+            _claude_score = result["claude_review"].get("review", {}).get("relevancy_score")
+        if result["gemini_review"] and result["gemini_review"].get("success"):
+            _gemini_score = result["gemini_review"].get("review", {}).get("relevancy_score")
+
         if database_url:
             store.store_tri_model_scoring_event(
                 run_id=run_id,
@@ -1119,6 +1127,26 @@ def main() -> None:
                 url=paper.get("url"),
                 database_url=database_url,
             )
+            # Dual-write: also update the publications row directly
+            store.update_publication_scoring(
+                publication_id=paper["id"],
+                final_relevancy_score=eval_data["final_relevancy_score"],
+                final_relevancy_reason=eval_data["final_relevancy_reason"],
+                final_summary=eval_data["final_summary"],
+                agreement_level=eval_data["agreement_level"],
+                confidence=eval_data["confidence"],
+                credibility_score=cred_data.get("credibility_score"),
+                credibility_reason=cred_data.get("credibility_reason"),
+                credibility_confidence=cred_data.get("credibility_confidence"),
+                credibility_signals=cred_data.get("credibility_signals"),
+                claude_score=_claude_score,
+                gemini_score=_gemini_score,
+                evaluator_rationale=eval_data["evaluator_rationale"],
+                disagreements=eval_data["disagreements"],
+                final_signals=eval_data["final_signals"],
+                scoring_run_id=run_id,
+                database_url=database_url,
+            )
         else:
             store.store_tri_model_scoring_event(
                 run_id=run_id,
@@ -1148,6 +1176,26 @@ def main() -> None:
                 credibility_confidence=cred_data.get("credibility_confidence"),
                 credibility_signals=cred_data.get("credibility_signals"),
                 url=paper.get("url"),
+                db_path=db_path,
+            )
+            # Dual-write: also update the publications row directly
+            store.update_publication_scoring(
+                publication_id=paper["id"],
+                final_relevancy_score=eval_data["final_relevancy_score"],
+                final_relevancy_reason=eval_data["final_relevancy_reason"],
+                final_summary=eval_data["final_summary"],
+                agreement_level=eval_data["agreement_level"],
+                confidence=eval_data["confidence"],
+                credibility_score=cred_data.get("credibility_score"),
+                credibility_reason=cred_data.get("credibility_reason"),
+                credibility_confidence=cred_data.get("credibility_confidence"),
+                credibility_signals=cred_data.get("credibility_signals"),
+                claude_score=_claude_score,
+                gemini_score=_gemini_score,
+                evaluator_rationale=eval_data["evaluator_rationale"],
+                disagreements=eval_data["disagreements"],
+                final_signals=eval_data["final_signals"],
+                scoring_run_id=run_id,
                 db_path=db_path,
             )
 
