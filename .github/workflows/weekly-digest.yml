@@ -24,7 +24,7 @@ on:
       recipients:
         description: 'Comma-separated recipient emails (default: rom@spotitearly.com)'
         required: false
-        default: 'rom@spotitearly.com'
+        default: 'research@spotitearly.com'
         type: string
       min_score:
         description: 'Minimum relevancy score threshold (default: 70)'
