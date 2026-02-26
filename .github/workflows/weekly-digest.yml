@@ -2,9 +2,9 @@ name: Weekly Digest Email
 
 on:
   schedule:
-    # Run every Monday at 18:00 UTC (10:00am PST / 1:00pm EST)
-    # After the daily tri-model run has had time to score publications
-    - cron: '0 18 * * 1'
+    # Run every Thursday at 06:00 UTC (1:00am EST)
+    # Covers the previous Mon–Sun window, giving extra days for scoring to complete
+    - cron: '0 6 * * 4'
   # Keep-alive: prevent GitHub from auto-disabling after 60 days of inactivity
   push:
     branches:
@@ -68,17 +68,38 @@ jobs:
           PYTHONIOENCODING: 'utf-8'
         run: |
           RECIPIENTS="${{ inputs.recipients || 'rom@spotitearly.com' }}"
-          WEEK="${{ inputs.week || 'last' }}"
           MIN_SCORE="${{ inputs.min_score || '70' }}"
           TOP_N="${{ inputs.top_n || '5' }}"
 
-          echo "Sending digest for week: $WEEK"
+          # Compute the week window based on run date.
+          # For scheduled runs (Thursday), this covers the previous Mon–Sun.
+          # For manual runs, --week input is used if provided.
+          if [ -n "${{ inputs.week }}" ]; then
+            WEEK_ARG="--week ${{ inputs.week }}"
+          else
+            # Previous Monday = today minus (weekday + 3) days from Thursday
+            # Using Python for portable date math
+            WEEK_START=$(python3 -c "
+          from datetime import date, timedelta
+          today = date.today()
+          # Last Monday: go back to most recent Monday before today
+          days_since_monday = today.weekday()  # Mon=0 .. Sun=6
+          last_monday = today - timedelta(days=days_since_monday + 7)
+          last_sunday = last_monday + timedelta(days=6)
+          print(f'{last_monday.isoformat()} {last_sunday.isoformat()}')
+          ")
+            WEEK_START_DATE=$(echo "$WEEK_START" | cut -d' ' -f1)
+            WEEK_END_DATE=$(echo "$WEEK_START" | cut -d' ' -f2)
+            WEEK_ARG="--week-start $WEEK_START_DATE --week-end $WEEK_END_DATE"
+          fi
+
+          echo "Week window: $WEEK_ARG"
           echo "Recipients: $RECIPIENTS"
           echo "Min score: $MIN_SCORE"
           echo "Top N: $TOP_N"
 
           python3 -u scripts/generate_weekly_digest.py \
-            --week "$WEEK" \
+            $WEEK_ARG \
             --send \
             --gmail \
             --to "$RECIPIENTS" \
@@ -100,7 +121,6 @@ jobs:
           echo "## Weekly Digest Sent" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Recipients:** ${{ inputs.recipients || 'rom@spotitearly.com' }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Week:** ${{ inputs.week || 'last' }}" >> $GITHUB_STEP_SUMMARY
           echo "**Min Score:** ${{ inputs.min_score || '70' }}" >> $GITHUB_STEP_SUMMARY
 
       - name: Failure notification
