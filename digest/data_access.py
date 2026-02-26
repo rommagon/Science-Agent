@@ -211,6 +211,7 @@ def get_publications_for_week(
     db_path: Optional[str] = None,
     database_url: Optional[str] = None,
     debug_ranking: bool = False,
+    min_relevancy_score: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Get top publications for a week.
 
@@ -222,6 +223,8 @@ def get_publications_for_week(
         db_path: SQLite database path (optional)
         database_url: PostgreSQL connection URL (optional)
         debug_ranking: If True, include debug data (top 20 candidates, ranking diagnostics)
+        min_relevancy_score: Minimum relevancy score threshold. Publications below
+            this score are excluded from must_reads and honorable_mentions.
 
     Returns:
         Dictionary with:
@@ -236,11 +239,13 @@ def get_publications_for_week(
 
     if use_pg:
         return _get_publications_postgres(
-            week_start, week_end, top_n, honorable_mentions, database_url, debug_ranking
+            week_start, week_end, top_n, honorable_mentions, database_url,
+            debug_ranking, min_relevancy_score
         )
     else:
         return _get_publications_sqlite(
-            week_start, week_end, top_n, honorable_mentions, db_path, debug_ranking
+            week_start, week_end, top_n, honorable_mentions, db_path,
+            debug_ranking, min_relevancy_score
         )
 
 
@@ -251,6 +256,7 @@ def _get_publications_postgres(
     honorable_mentions: int,
     database_url: Optional[str],
     debug_ranking: bool = False,
+    min_relevancy_score: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Get publications from PostgreSQL."""
     import psycopg2
@@ -323,7 +329,8 @@ def _get_publications_postgres(
 
         return _process_publications(
             list(rows), week_start, week_end, top_n, honorable_mentions,
-            must_reads_data, tri_model_data, debug_ranking
+            must_reads_data, tri_model_data, debug_ranking,
+            min_relevancy_score
         )
 
     finally:
@@ -455,6 +462,7 @@ def _get_publications_sqlite(
     honorable_mentions: int,
     db_path: Optional[str],
     debug_ranking: bool = False,
+    min_relevancy_score: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Get publications from SQLite."""
     conn = _get_sqlite_connection(db_path)
@@ -504,7 +512,7 @@ def _get_publications_sqlite(
         return _process_publications(
             rows, week_start, week_end, top_n, honorable_mentions,
             {}, {},  # No legacy enrichment needed for SQLite
-            debug_ranking
+            debug_ranking, min_relevancy_score
         )
 
     finally:
@@ -520,6 +528,7 @@ def _process_publications(
     must_reads_data: Dict[str, Dict],
     tri_model_data: Dict[str, Dict],
     debug_ranking: bool = False,
+    min_relevancy_score: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Process and rank publications.
 
@@ -527,6 +536,9 @@ def _process_publications(
     1. relevancy_score DESC (only ranking key)
     2. Publication date DESC (tie-breaker only)
     3. Title ASC (deterministic)
+
+    If min_relevancy_score is set, only publications with a relevancy_score
+    at or above the threshold are included in must_reads and honorable_mentions.
     """
     scored_pubs = []
     ranking_warnings = []
@@ -704,13 +716,29 @@ def _process_publications(
         )
     )
 
+    # Apply minimum relevancy score threshold if set.
+    # Filter AFTER sorting so that total_candidates still reflects all scored
+    # publications, but only those meeting the threshold are eligible for selection.
+    if min_relevancy_score is not None:
+        eligible_pubs = [
+            p for p in scored_pubs
+            if p.get("relevancy_score") is not None
+            and p["relevancy_score"] >= min_relevancy_score
+        ]
+        logger.info(
+            "Score threshold %.1f applied: %d of %d scored publications eligible",
+            min_relevancy_score, len(eligible_pubs), len(scored_pubs),
+        )
+    else:
+        eligible_pubs = scored_pubs
+
     # Validate ranking: check for anomalies
-    for i, pub in enumerate(scored_pubs[:top_n]):
+    for i, pub in enumerate(eligible_pubs[:top_n]):
         score = pub.get("relevancy_score")
         score_val = score if score is not None else -1
 
         # Check if any higher-scored items appear later
-        for j, later_pub in enumerate(scored_pubs[i + 1:top_n + 5], start=i + 1):
+        for j, later_pub in enumerate(eligible_pubs[i + 1:top_n + 5], start=i + 1):
             later_score = later_pub.get("relevancy_score")
             later_val = later_score if later_score is not None else -1
             if later_val > score_val:
@@ -732,8 +760,8 @@ def _process_publications(
             logger.warning(warning)
 
     # Split into must_reads and honorable_mentions
-    must_reads = scored_pubs[:top_n]
-    mentions = scored_pubs[top_n:top_n + honorable_mentions] if honorable_mentions > 0 else []
+    must_reads = eligible_pubs[:top_n]
+    mentions = eligible_pubs[top_n:top_n + honorable_mentions] if honorable_mentions > 0 else []
 
     scoring_method = "relevancy_only"
 
@@ -747,6 +775,7 @@ def _process_publications(
         "scoring_method": scoring_method,
         "week_start": week_start.isoformat(),
         "week_end": week_end.isoformat(),
+        "min_relevancy_score": min_relevancy_score,
     }
 
     # Add debug data if requested

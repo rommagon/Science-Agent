@@ -453,6 +453,7 @@
                     <!-- Content -->
                     <tr>
                         <td class="content">
+                            {% if must_reads %}
                             <p class="intro">
                                 This week we reviewed <strong>{{ total_candidates }} publications</strong> to identify the most relevant advances in cancer early detection. Below are the top {{ must_reads|length }} studies that align with our mission.
                             </p>
@@ -547,6 +548,24 @@
                                 {% endif %}
                             </div>
                             {% endfor %}
+                            {% else %}
+                            <p class="intro">
+                                This week we reviewed <strong>{{ total_candidates }} publications</strong> in cancer early detection research{% if min_relevancy_score %}, but none met our relevancy threshold of {{ min_relevancy_score|int }}/100{% endif %}.
+                            </p>
+
+                            <div style="text-align: center; padding: 40px 20px; background-color: #fafafa; border-radius: 6px; margin-bottom: 24px;">
+                                <div style="font-size: 36px; margin-bottom: 16px;">&#128269;</div>
+                                <h3 style="font-family: 'Georgia', serif; font-size: 18px; color: #1a1a1a; margin: 0 0 12px 0;">No Must-Reads This Week</h3>
+                                <p style="font-size: 14px; color: #6b7280; line-height: 1.6; margin: 0; max-width: 400px; display: inline-block;">
+                                    {% if min_relevancy_score %}
+                                    We only surface publications that score {{ min_relevancy_score|int }} or above on our AI-powered relevancy scale, ensuring every recommendation is truly noteworthy. Some weeks, the research landscape simply doesn't produce results that clear this bar.
+                                    {% else %}
+                                    No publications were found for this date range. This may be due to a gap in publication indexing or an unusually quiet week in the field.
+                                    {% endif %}
+                                </p>
+                                <p style="font-size: 13px; color: #9ca3af; margin-top: 16px;">We'll be back next week with the latest findings.</p>
+                            </div>
+                            {% endif %}
 
                             {% if honorable_mentions %}
                             <!-- Honorable Mentions -->

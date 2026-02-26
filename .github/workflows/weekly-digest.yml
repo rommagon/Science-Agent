@@ -1,0 +1,111 @@
+name: Weekly Digest Email
+
+on:
+  schedule:
+    # Run every Monday at 18:00 UTC (10:00am PST / 1:00pm EST)
+    # After the daily tri-model run has had time to score publications
+    - cron: '0 18 * * 1'
+  # Keep-alive: prevent GitHub from auto-disabling after 60 days of inactivity
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/weekly-digest.yml'
+  workflow_dispatch:
+    inputs:
+      week:
+        description: 'Which week to generate digest for'
+        required: false
+        default: 'last'
+        type: choice
+        options:
+          - last
+          - this
+      recipients:
+        description: 'Comma-separated recipient emails (default: rom@spotitearly.com)'
+        required: false
+        default: 'rom@spotitearly.com'
+        type: string
+      min_score:
+        description: 'Minimum relevancy score threshold (default: 70)'
+        required: false
+        default: '70'
+        type: string
+      top_n:
+        description: 'Max number of publications to include (default: 5)'
+        required: false
+        default: '5'
+        type: string
+
+jobs:
+  send-weekly-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install Jinja2
+
+      - name: Generate and send weekly digest
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          DIGEST_FEEDBACK_SECRET: ${{ secrets.DIGEST_FEEDBACK_SECRET }}
+          DIGEST_FEEDBACK_BASE_URL: ${{ secrets.DIGEST_FEEDBACK_BASE_URL }}
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: 'utf-8'
+        run: |
+          RECIPIENTS="${{ inputs.recipients || 'rom@spotitearly.com' }}"
+          WEEK="${{ inputs.week || 'last' }}"
+          MIN_SCORE="${{ inputs.min_score || '70' }}"
+          TOP_N="${{ inputs.top_n || '5' }}"
+
+          echo "Sending digest for week: $WEEK"
+          echo "Recipients: $RECIPIENTS"
+          echo "Min score: $MIN_SCORE"
+          echo "Top N: $TOP_N"
+
+          python3 -u scripts/generate_weekly_digest.py \
+            --week "$WEEK" \
+            --send \
+            --gmail \
+            --to "$RECIPIENTS" \
+            --min-score "$MIN_SCORE" \
+            --top-n "$TOP_N" \
+            --verbose
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-digest-${{ github.run_id }}
+          path: data/outputs/weekly-digest/
+          retention-days: 30
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "## Weekly Digest Sent" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Recipients:** ${{ inputs.recipients || 'rom@spotitearly.com' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Week:** ${{ inputs.week || 'last' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Min Score:** ${{ inputs.min_score || '70' }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Failure notification
+        if: failure()
+        run: |
+          echo "## Weekly Digest Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the workflow logs for details." >> $GITHUB_STEP_SUMMARY

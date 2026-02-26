@@ -291,6 +291,13 @@ Examples:
         default=0,
         help="Number of honorable mentions to include (default: 0)",
     )
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=70,
+        help="Minimum relevancy score threshold. Only publications scoring at or "
+             "above this value are included in the digest (default: 70)",
+    )
 
     # Mode arguments
     parser.add_argument(
@@ -440,6 +447,7 @@ Examples:
     print(f"Week Start:    {week_start.isoformat()}")
     print(f"Week End:      {week_end.isoformat()}")
     print(f"Top N:         {args.top_n}")
+    print(f"Min Score:     {args.min_score}")
     print(f"Honorable:     {args.honorable_mentions}")
     print(f"Mode:          {'send' if args.send else 'demo'}")
     print(f"Output Dir:    {output_dir}")
@@ -468,6 +476,7 @@ Examples:
         db_path=db_path,
         database_url=database_url,
         debug_ranking=args.debug_ranking,
+        min_relevancy_score=args.min_score,
     )
 
     # Add signed thumbs up/down URLs per publication when feedback is configured.

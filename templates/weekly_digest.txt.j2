@@ -3,9 +3,10 @@ SPOTITEARLY MUST-READS
 Week of {{ week_start }} to {{ week_end }}
 ================================================================================
 
-TOP 5 MUST-READS — Ranked by relevance to early detection
+TOP MUST-READS — Ranked by relevance to early detection
 
 Your weekly digest of the most important cancer early detection research.
+{% if must_reads %}
 {{ must_reads|length }} publications selected from {{ total_candidates }} screened.
 
 {% for item in must_reads %}
@@ -46,6 +47,17 @@ Study details: {% if signals.peer_reviewed %}Peer-reviewed{% elif signals.prepri
 {% endif %}
 {% endif %}
 {% endfor %}
+{% else %}
+{{ total_candidates }} publications were reviewed but none met our relevancy
+threshold{% if min_relevancy_score %} of {{ min_relevancy_score|int }}/100{% endif %} this week.
+
+We only surface publications that score highly on our AI-powered relevancy
+scale, ensuring every recommendation is truly noteworthy. Some weeks, the
+research landscape simply doesn't produce results that clear this bar.
+
+We'll be back next week with the latest findings.
+
+{% endif %}
 {% if honorable_mentions %}
 ================================================================================
 HONORABLE MENTIONS
