@@ -19,6 +19,10 @@ DOI_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# Strip trailing alphabetic runs that are likely concatenated prose
+# e.g. "10.1038/s43018-025-01109-8whether" → "10.1038/s43018-025-01109-8"
+DOI_TRAILING_ALPHA = re.compile(r'([^a-zA-Z])([a-zA-Z]{2,})$')
+
 # PMID regex pattern
 PMID_PATTERN = re.compile(
     r'(?:pmid[:\s]*|pubmed\.ncbi\.nlm\.nih\.gov/)(\d{7,8})',
@@ -119,6 +123,11 @@ def extract_doi(text: str) -> Optional[str]:
         doi = match.group(1)
         # Normalize: lowercase and trim trailing punctuation
         doi = doi.lower().rstrip('.,;:)')
+        # Strip trailing alphabetic run that is likely concatenated prose
+        # DOI suffixes end with digits/hyphens, not English words
+        alpha_match = DOI_TRAILING_ALPHA.search(doi)
+        if alpha_match:
+            doi = doi[:alpha_match.end(1)]
         return doi
 
     return None

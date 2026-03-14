@@ -78,6 +78,26 @@ class TestExtractDoi:
         result = extract_doi(text)
         assert result == "10.1038/s41586-021-03819-2"
 
+    def test_extract_doi_strips_trailing_prose(self):
+        """Test that trailing prose concatenated to DOI is stripped."""
+        # This was a real bug: "whether" was appended to DOI
+        text = "10.1038/s43018-025-01109-8whether the results"
+        result = extract_doi(text)
+        assert result == "10.1038/s43018-025-01109-8"
+
+    def test_extract_doi_strips_trailing_word_no_space(self):
+        """Test DOI extraction when text runs into DOI with no separator."""
+        text = "See https://doi.org/10.1038/s43018-025-01109-8however this"
+        result = extract_doi(text)
+        assert result == "10.1038/s43018-025-01109-8"
+
+    def test_extract_doi_preserves_valid_alpha_suffix(self):
+        """Test that single-char alpha suffixes in DOIs are kept (e.g. version letters)."""
+        text = "10.1234/article-v2a"
+        result = extract_doi(text)
+        # Single trailing alpha is kept (could be part of DOI)
+        assert result == "10.1234/article-v2a"
+
     def test_extract_doi_none_when_missing(self):
         """Test that None is returned when no DOI found."""
         assert extract_doi("No DOI here") is None
