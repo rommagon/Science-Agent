@@ -90,6 +90,15 @@ jobs:
           echo "Executing: $CMD"
           $CMD
 
+      - name: Sync publications to LinkedIn Manager
+        if: success()
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          LINKEDIN_MANAGER_SUPABASE_URL: ${{ secrets.LINKEDIN_MANAGER_SUPABASE_URL }}
+          LINKEDIN_MANAGER_SUPABASE_SERVICE_KEY: ${{ secrets.LINKEDIN_MANAGER_SUPABASE_SERVICE_KEY }}
+        run: python3 -u sync_to_linkedin.py
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
