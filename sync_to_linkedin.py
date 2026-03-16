@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 MIN_RELEVANCY_SCORE = 80      # Only sync High tier publications
 LOOKBACK_DAYS = 30             # How far back to look for publications
-MAX_FACT_TEXT_CHARS = 600      # Truncate fact text to fit token budget
+MAX_FACT_TEXT_CHARS = 1200     # Allow longer text to preserve useful quotes from abstracts
 SOURCE_NAME = "science_agent"  # Identifies synced facts in fact_bank
 
 # Domain-specific tag keywords to extract from titles/summaries
@@ -67,13 +67,22 @@ def derive_tags(title: str, summary: str, venue: str) -> List[str]:
     return tags
 
 
-def build_fact_text(summary: str, relevancy_reason: str) -> str:
-    """Build a concise fact text from the publication summary and relevancy reason."""
-    # Prefer the summary (which is the AI-generated final_summary)
-    text = summary or relevancy_reason or ""
-    text = text.strip()
+def build_fact_text(title: str, raw_text: str, venue: str) -> str:
+    """Build fact text from the publication's actual content for LinkedIn posting.
+
+    Prioritises the paper's own abstract/text (which contains real findings,
+    statistics, and quotable statements) over AI-generated summaries.
+    """
+    parts = []
+    if title:
+        parts.append(title)
+    if venue:
+        parts.append(f"Published in: {venue}")
+    if raw_text:
+        parts.append(raw_text.strip())
+
+    text = "\n\n".join(parts) if parts else ""
     if len(text) > MAX_FACT_TEXT_CHARS:
-        # Truncate at last sentence boundary within limit
         truncated = text[:MAX_FACT_TEXT_CHARS]
         last_period = truncated.rfind(".")
         if last_period > MAX_FACT_TEXT_CHARS // 2:
@@ -121,7 +130,7 @@ def fetch_high_scoring_publications(database_url: str) -> List[Dict]:
         desired = [
             pk, "title", "authors", "venue", "source",
             "published_date", "canonical_url", "url", "doi", "pmid",
-            "final_relevancy_score", "final_summary", "final_relevancy_reason",
+            "final_relevancy_score", "raw_text", "abstract",
             "credibility_score", "agreement_level",
         ]
         select_cols = [c for c in desired if c in available]
@@ -162,19 +171,19 @@ def transform_to_facts(publications: List[Dict]) -> List[Dict]:
         if not title:
             continue
 
-        summary = pub.get("final_summary", "") or ""
-        reason = pub.get("final_relevancy_reason", "") or ""
+        # Use actual paper abstract/content — not AI-generated summaries
+        raw_text = pub.get("raw_text", "") or pub.get("abstract", "") or ""
         venue = pub.get("venue", "") or pub.get("source", "") or ""
         authors = pub.get("authors", "") or ""
 
-        fact_text = build_fact_text(summary, reason)
+        fact_text = build_fact_text(title, raw_text, venue)
         if not fact_text:
-            logger.warning(f"Skipping publication with no summary: {title}")
+            logger.warning(f"Skipping publication with no content: {title}")
             continue
 
-        tags = derive_tags(title, summary, venue)
+        tags = derive_tags(title, raw_text, venue)
 
-        # Build description with metadata
+        # Build description with metadata useful for post creation
         desc_parts = []
         if venue:
             desc_parts.append(venue)
@@ -182,9 +191,6 @@ def transform_to_facts(publications: List[Dict]) -> List[Dict]:
             # Truncate long author lists
             author_str = authors if len(authors) <= 80 else authors[:77] + "..."
             desc_parts.append(author_str)
-        score = pub.get("final_relevancy_score")
-        if score is not None:
-            desc_parts.append(f"Relevancy: {score}/100")
 
         facts.append({
             "text": fact_text,
