@@ -187,18 +187,24 @@ def _build_link(pub: Dict) -> Optional[str]:
     3. doi -> https://doi.org/<doi>
     4. pmid -> https://pubmed.ncbi.nlm.nih.gov/<pmid>/
     5. None
+
+    All URLs are passed through normalize_url to strip trailing prose
+    that may have been concatenated during ingestion (e.g. "...01111-0we").
     """
+    from enrich.canonical_url import normalize_url
+
+    link = None
     if pub.get("canonical_url"):
-        return pub["canonical_url"]
+        link = pub["canonical_url"]
+    elif pub.get("url"):
+        link = pub["url"]
+    elif pub.get("doi"):
+        link = f"https://doi.org/{pub['doi']}"
+    elif pub.get("pmid"):
+        link = f"https://pubmed.ncbi.nlm.nih.gov/{pub['pmid']}/"
 
-    if pub.get("url"):
-        return pub["url"]
-
-    if pub.get("doi"):
-        return f"https://doi.org/{pub['doi']}"
-
-    if pub.get("pmid"):
-        return f"https://pubmed.ncbi.nlm.nih.gov/{pub['pmid']}/"
+    if link:
+        return normalize_url(link) or link
 
     return None
 
