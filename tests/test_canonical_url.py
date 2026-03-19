@@ -50,6 +50,31 @@ class TestNormalizeUrl:
         result = normalize_url("https://example.com/article#section")
         assert "#" not in result
 
+    def test_normalize_strips_trailing_prose_from_url(self):
+        """Test that trailing prose concatenated to URL path is stripped."""
+        # Real bug: "we" appended to article URL
+        result = normalize_url("https://www.nature.com/articles/s43018-025-01111-0we")
+        assert result == "https://www.nature.com/articles/s43018-025-01111-0"
+
+    def test_normalize_strips_trailing_word_whether(self):
+        """Test stripping 'whether' concatenated to URL."""
+        result = normalize_url("https://www.nature.com/articles/s43018-025-01109-8whether")
+        assert result == "https://www.nature.com/articles/s43018-025-01109-8"
+
+    def test_normalize_preserves_normal_paths(self):
+        """Test that normal URL paths ending in words are not modified."""
+        result = normalize_url("https://example.com/about")
+        assert result == "https://example.com/about"
+
+        result = normalize_url("https://example.com/articles")
+        assert result == "https://example.com/articles"
+
+    def test_normalize_preserves_single_alpha_suffix(self):
+        """Test that single trailing alpha char is preserved (could be version)."""
+        result = normalize_url("https://example.com/article-v2a")
+        # Single alpha after digit is kept (could be intentional)
+        assert "v2a" in result
+
 
 class TestExtractDoi:
     """Tests for DOI extraction."""

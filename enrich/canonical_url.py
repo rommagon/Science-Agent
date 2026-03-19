@@ -23,6 +23,11 @@ DOI_PATTERN = re.compile(
 # e.g. "10.1038/s43018-025-01109-8whether" → "10.1038/s43018-025-01109-8"
 DOI_TRAILING_ALPHA = re.compile(r'([^a-zA-Z])([a-zA-Z]{2,})$')
 
+# Same pattern but specifically for URL paths: digit followed by 2+ alpha chars
+# e.g. "/articles/s43018-025-01111-0we" → "/articles/s43018-025-01111-0"
+# Won't match normal paths like "/about" (no digit before the alpha run)
+URL_PATH_TRAILING_ALPHA = re.compile(r'(\d)([a-zA-Z]{2,})$')
+
 # PMID regex pattern
 PMID_PATTERN = re.compile(
     r'(?:pmid[:\s]*|pubmed\.ncbi\.nlm\.nih\.gov/)(\d{7,8})',
@@ -77,6 +82,13 @@ def normalize_url(url: str) -> Optional[str]:
     if not parsed.netloc:
         return None
 
+    # Strip trailing alphabetic prose concatenated to URL paths
+    # e.g. ".../s43018-025-01111-0we" → ".../s43018-025-01111-0"
+    path = parsed.path
+    trailing_match = URL_PATH_TRAILING_ALPHA.search(path)
+    if trailing_match:
+        path = path[:trailing_match.end(1)]
+
     # Common tracking parameters to remove
     tracking_params = {
         'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
@@ -97,7 +109,7 @@ def normalize_url(url: str) -> Optional[str]:
     normalized = urlunparse((
         scheme,
         parsed.netloc.lower(),
-        parsed.path.rstrip('/') if parsed.path != '/' else '/',
+        path.rstrip('/') if path != '/' else '/',
         parsed.params,
         new_query,
         '',  # Remove fragment

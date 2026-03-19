@@ -3,7 +3,7 @@ name: Weekly Digest Email
 on:
   schedule:
     # Run every Thursday at 06:00 UTC (1:00am EST)
-    # Covers the previous Thu–Wed window (7-day digest cycle)
+    # Looks back 7 days from run time
     - cron: '0 6 * * 4'
   # Keep-alive: prevent GitHub from auto-disabling after 60 days of inactivity
   push:
@@ -13,18 +13,15 @@ on:
       - '.github/workflows/weekly-digest.yml'
   workflow_dispatch:
     inputs:
-      week:
-        description: 'Which week to generate digest for'
+      lookback_days:
+        description: 'Number of days to look back from now (default: 7)'
         required: false
-        default: 'last'
-        type: choice
-        options:
-          - last
-          - this
+        default: '7'
+        type: string
       recipients:
         description: 'Comma-separated recipient emails (default: rom@spotitearly.com)'
         required: false
-        default: 'research@spotitearly.com'
+        default: 'rom@spotitearly.com'
         type: string
       min_score:
         description: 'Minimum relevancy score threshold (default: 70)'
@@ -70,35 +67,27 @@ jobs:
           RECIPIENTS="${{ inputs.recipients || 'rom@spotitearly.com' }}"
           MIN_SCORE="${{ inputs.min_score || '70' }}"
           TOP_N="${{ inputs.top_n || '5' }}"
+          LOOKBACK="${{ inputs.lookback_days || '7' }}"
 
-          # Compute the week window: previous Thursday → Wednesday (7 days).
-          # For scheduled runs (Thursday 1am EST), this covers the prior week.
-          # For manual runs, --week input is used if provided.
-          if [ -n "${{ inputs.week }}" ]; then
-            WEEK_ARG="--week ${{ inputs.week }}"
-          else
-            # Using Python for portable date math
-            WEEK_DATES=$(python3 -c "
+          # Always look back N days from right now (default 7)
+          WEEK_DATES=$(python3 -c "
           from datetime import date, timedelta
           today = date.today()
-          # Previous Thursday: 7 days ago (since we run on Thursday)
-          days_since_thursday = (today.weekday() - 3) % 7  # Thu=0
-          prev_thursday = today - timedelta(days=days_since_thursday + 7)
-          wednesday = prev_thursday + timedelta(days=6)
-          print(f'{prev_thursday.isoformat()} {wednesday.isoformat()}')
+          lookback = int('${LOOKBACK}')
+          start = today - timedelta(days=lookback)
+          print(f'{start.isoformat()} {today.isoformat()}')
           ")
-            WEEK_START_DATE=$(echo "$WEEK_DATES" | cut -d' ' -f1)
-            WEEK_END_DATE=$(echo "$WEEK_DATES" | cut -d' ' -f2)
-            WEEK_ARG="--week-start $WEEK_START_DATE --week-end $WEEK_END_DATE"
-          fi
+          WEEK_START_DATE=$(echo "$WEEK_DATES" | cut -d' ' -f1)
+          WEEK_END_DATE=$(echo "$WEEK_DATES" | cut -d' ' -f2)
 
-          echo "Week window: $WEEK_ARG"
+          echo "Window: $WEEK_START_DATE to $WEEK_END_DATE (${LOOKBACK} days back)"
           echo "Recipients: $RECIPIENTS"
           echo "Min score: $MIN_SCORE"
           echo "Top N: $TOP_N"
 
           python3 -u scripts/generate_weekly_digest.py \
-            $WEEK_ARG \
+            --week-start "$WEEK_START_DATE" \
+            --week-end "$WEEK_END_DATE" \
             --send \
             --gmail \
             --to "$RECIPIENTS" \
@@ -119,7 +108,8 @@ jobs:
         run: |
           echo "## Weekly Digest Sent" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Recipients:** ${{ inputs.recipients || 'rom@spotitearly.com' }}" >> $GITHUB_STEP_SUMMARY
+          RECIPIENTS="${{ inputs.recipients || 'rom@spotitearly.com' }}"
+          echo "**Recipients:** $RECIPIENTS" >> $GITHUB_STEP_SUMMARY
           echo "**Min Score:** ${{ inputs.min_score || '70' }}" >> $GITHUB_STEP_SUMMARY
 
       - name: Failure notification
