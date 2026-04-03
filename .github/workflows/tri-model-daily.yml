@@ -53,15 +53,10 @@ jobs:
           LINKEDIN_MANAGER_SUPABASE_URL: ${{ secrets.LINKEDIN_MANAGER_SUPABASE_URL }}
           LINKEDIN_MANAGER_SUPABASE_SERVICE_KEY: ${{ secrets.LINKEDIN_MANAGER_SUPABASE_SERVICE_KEY }}
         run: |
-          # Write SSH key to file
+          # Write SSH key from hex-encoded secret
           mkdir -p ~/.ssh
-          cat <<< "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          echo "$EC2_SSH_KEY" | xxd -r -p > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          # Debug: show key format (first/last line only, no secrets)
-          head -1 ~/.ssh/deploy_key
-          tail -1 ~/.ssh/deploy_key
-          wc -l ~/.ssh/deploy_key
-          ssh-keygen -lf ~/.ssh/deploy_key 2>&1 || true
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
           # Build the remote command

@@ -50,9 +50,9 @@ jobs:
           DIGEST_FEEDBACK_SECRET: ${{ secrets.DIGEST_FEEDBACK_SECRET }}
           DIGEST_FEEDBACK_BASE_URL: ${{ secrets.DIGEST_FEEDBACK_BASE_URL }}
         run: |
-          # Write SSH key to file
+          # Write SSH key from hex-encoded secret
           mkdir -p ~/.ssh
-          echo "$EC2_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          echo "$EC2_SSH_KEY" | xxd -r -p > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
