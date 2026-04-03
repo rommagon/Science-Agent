@@ -40,77 +40,74 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install Jinja2
-
-      - name: Generate and send weekly digest
+      - name: Generate and send weekly digest on EC2
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ai.spotitearly.com
+          EC2_USER: ubuntu
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           DIGEST_FEEDBACK_SECRET: ${{ secrets.DIGEST_FEEDBACK_SECRET }}
           DIGEST_FEEDBACK_BASE_URL: ${{ secrets.DIGEST_FEEDBACK_BASE_URL }}
-          PYTHONUTF8: '1'
-          PYTHONIOENCODING: 'utf-8'
         run: |
+          # Write SSH key to file
+          mkdir -p ~/.ssh
+          echo "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
           RECIPIENTS="${{ inputs.recipients || 'rom@spotitearly.com' }}"
           MIN_SCORE="${{ inputs.min_score || '70' }}"
           TOP_N="${{ inputs.top_n || '5' }}"
           LOOKBACK="${{ inputs.lookback_days || '7' }}"
 
-          # Always look back N days from right now (default 7)
-          WEEK_DATES=$(python3 -c "
-          from datetime import date, timedelta
-          today = date.today()
-          lookback = int('${LOOKBACK}')
-          start = today - timedelta(days=lookback)
-          print(f'{start.isoformat()} {today.isoformat()}')
-          ")
-          WEEK_START_DATE=$(echo "$WEEK_DATES" | cut -d' ' -f1)
-          WEEK_END_DATE=$(echo "$WEEK_DATES" | cut -d' ' -f2)
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
+            set -e
+            cd /home/ubuntu/sie-ai/acitracker_v1
+            git pull --ff-only origin main
+            source .venv/bin/activate
 
-          echo "Window: $WEEK_START_DATE to $WEEK_END_DATE (${LOOKBACK} days back)"
-          echo "Recipients: $RECIPIENTS"
-          echo "Min score: $MIN_SCORE"
-          echo "Top N: $TOP_N"
+            export DATABASE_URL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
+            export GMAIL_ADDRESS="$GMAIL_ADDRESS"
+            export GMAIL_APP_PASSWORD="$GMAIL_APP_PASSWORD"
+            export DIGEST_FEEDBACK_SECRET="$DIGEST_FEEDBACK_SECRET"
+            export DIGEST_FEEDBACK_BASE_URL="$DIGEST_FEEDBACK_BASE_URL"
+            export PYTHONUTF8=1
+            export PYTHONIOENCODING=utf-8
 
-          python3 -u scripts/generate_weekly_digest.py \
-            --week-start "$WEEK_START_DATE" \
-            --week-end "$WEEK_END_DATE" \
-            --send \
-            --gmail \
-            --to "$RECIPIENTS" \
-            --min-score "$MIN_SCORE" \
-            --top-n "$TOP_N" \
-            --verbose
+            # Calculate date window
+            WEEK_DATES=\$(python3 -c "
+            from datetime import date, timedelta
+            today = date.today()
+            lookback = int('$LOOKBACK')
+            start = today - timedelta(days=lookback)
+            print(f'{start.isoformat()} {today.isoformat()}')
+            ")
+            WEEK_START_DATE=\$(echo "\$WEEK_DATES" | cut -d' ' -f1)
+            WEEK_END_DATE=\$(echo "\$WEEK_DATES" | cut -d' ' -f2)
 
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: weekly-digest-${{ github.run_id }}
-          path: data/outputs/weekly-digest/
-          retention-days: 30
+            echo "Window: \$WEEK_START_DATE to \$WEEK_END_DATE ($LOOKBACK days back)"
+            echo "Recipients: $RECIPIENTS"
+
+            python3 -u scripts/generate_weekly_digest.py \
+              --week-start "\$WEEK_START_DATE" \
+              --week-end "\$WEEK_END_DATE" \
+              --send \
+              --gmail \
+              --to "$RECIPIENTS" \
+              --min-score "$MIN_SCORE" \
+              --top-n "$TOP_N" \
+              --verbose
+          REMOTE_SCRIPT
 
       - name: Summary
         if: success()
         run: |
           echo "## Weekly Digest Sent" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Target:** EC2 (ai.spotitearly.com)" >> $GITHUB_STEP_SUMMARY
           RECIPIENTS="${{ inputs.recipients || 'rom@spotitearly.com' }}"
           echo "**Recipients:** $RECIPIENTS" >> $GITHUB_STEP_SUMMARY
-          echo "**Min Score:** ${{ inputs.min_score || '70' }}" >> $GITHUB_STEP_SUMMARY
 
       - name: Failure notification
         if: failure()
