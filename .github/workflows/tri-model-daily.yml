@@ -55,8 +55,13 @@ jobs:
         run: |
           # Write SSH key to file
           mkdir -p ~/.ssh
-          echo "$EC2_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          cat <<< "$EC2_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          # Debug: show key format (first/last line only, no secrets)
+          head -1 ~/.ssh/deploy_key
+          tail -1 ~/.ssh/deploy_key
+          wc -l ~/.ssh/deploy_key
+          ssh-keygen -lf ~/.ssh/deploy_key 2>&1 || true
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
           # Build the remote command
