@@ -76,13 +76,7 @@ jobs:
             export PYTHONIOENCODING=utf-8
 
             # Calculate date window
-            WEEK_DATES=\$(python3 -c "
-from datetime import date, timedelta
-today = date.today()
-lookback = int('$LOOKBACK')
-start = today - timedelta(days=lookback)
-print(f'{start.isoformat()} {today.isoformat()}')
-            ")
+            WEEK_DATES=\$(python3 -c "from datetime import date, timedelta; today = date.today(); lookback = int('$LOOKBACK'); start = today - timedelta(days=lookback); print(f'{start.isoformat()} {today.isoformat()}')")
             WEEK_START_DATE=\$(echo "\$WEEK_DATES" | cut -d' ' -f1)
             WEEK_END_DATE=\$(echo "\$WEEK_DATES" | cut -d' ' -f2)
 
