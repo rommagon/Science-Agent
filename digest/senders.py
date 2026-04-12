@@ -10,10 +10,15 @@ import logging
 import os
 import smtplib
 from abc import ABC, abstractmethod
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.policy import EmailPolicy
-from typing import List, Optional
+from typing import List, Optional, Sequence, Tuple
+
+# Type alias: (filename, pdf_bytes) — pdf_bytes is already a real PDF,
+# callers are responsible for validation before passing to send().
+Attachment = Tuple[str, bytes]
 
 # Email policy for proper UTF-8 encoding
 UTF8_POLICY = EmailPolicy(utf8=True)
@@ -31,6 +36,7 @@ class EmailSender(ABC):
         subject: str,
         html_content: str,
         text_content: str,
+        attachments: Optional[Sequence[Attachment]] = None,
     ) -> dict:
         """Send an email.
 
@@ -39,6 +45,9 @@ class EmailSender(ABC):
             subject: Email subject line
             html_content: HTML body content
             text_content: Plain text body content
+            attachments: Optional list of (filename, pdf_bytes) pairs.
+                Supported by Gmail + Demo senders. SendGrid currently
+                logs a warning and skips them.
 
         Returns:
             Dictionary with:
@@ -66,12 +75,14 @@ class DemoSender(EmailSender):
         subject: str,
         html_content: str,
         text_content: str,
+        attachments: Optional[Sequence[Attachment]] = None,
     ) -> dict:
         """Print email details without sending.
 
         Returns:
             Success result with demo details
         """
+        attachments = list(attachments or [])
         output_lines = [
             "",
             "=" * 70,
@@ -81,6 +92,11 @@ class DemoSender(EmailSender):
             f"Subject: {subject}",
             f"HTML Content Length: {len(html_content)} chars",
             f"Text Content Length: {len(text_content)} chars",
+            f"Attachments: {len(attachments)}",
+        ]
+        for name, data in attachments:
+            output_lines.append(f"  - {name} ({len(data)} bytes)")
+        output_lines += [
             "=" * 70,
             "",
             "First 500 chars of text content:",
@@ -106,6 +122,7 @@ class DemoSender(EmailSender):
                 "subject": subject,
                 "html_length": len(html_content),
                 "text_length": len(text_content),
+                "attachment_count": len(attachments),
             },
         }
 
@@ -148,12 +165,21 @@ class SendGridSender(EmailSender):
         subject: str,
         html_content: str,
         text_content: str,
+        attachments: Optional[Sequence[Attachment]] = None,
     ) -> dict:
         """Send email via SendGrid.
 
         Returns:
             Result dictionary with success status and details
         """
+        if attachments:
+            # SendGrid attachment support is not wired up — prod uses
+            # Gmail. Warn loudly rather than silently dropping PDFs.
+            logger.warning(
+                "SendGrid sender received %d attachment(s); they will be "
+                "skipped. Use Gmail sender for PDF attachments.",
+                len(attachments),
+            )
         try:
             # Import sendgrid here to avoid requiring it unless actually used
             from sendgrid import SendGridAPIClient
@@ -266,24 +292,45 @@ class GmailSender(EmailSender):
         subject: str,
         html_content: str,
         text_content: str,
+        attachments: Optional[Sequence[Attachment]] = None,
     ) -> dict:
         """Send email via Gmail SMTP.
+
+        When attachments are present, the outer MIME type is 'mixed' and
+        the text+HTML body becomes a nested 'alternative' part. Without
+        attachments, the outer type stays 'alternative' for byte-for-byte
+        compatibility with the pre-existing digest output.
 
         Returns:
             Result dictionary with success status and details
         """
+        attachments = list(attachments or [])
         try:
-            # Create message
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = subject
-            msg["From"] = f"{self.from_name} <{self.gmail_address}>"
-            msg["To"] = ", ".join(to)
+            # Build body as a multipart/alternative (text + html)
+            body = MIMEMultipart("alternative")
+            body.attach(MIMEText(text_content, "plain", "utf-8"))
+            body.attach(MIMEText(html_content, "html", "utf-8"))
 
-            # Attach text and HTML parts (text first, HTML second for proper rendering)
-            text_part = MIMEText(text_content, "plain", "utf-8")
-            html_part = MIMEText(html_content, "html", "utf-8")
-            msg.attach(text_part)
-            msg.attach(html_part)
+            if attachments:
+                msg = MIMEMultipart("mixed")
+                msg["Subject"] = subject
+                msg["From"] = f"{self.from_name} <{self.gmail_address}>"
+                msg["To"] = ", ".join(to)
+                msg.attach(body)
+                for filename, data in attachments:
+                    part = MIMEApplication(data, _subtype="pdf")
+                    part.add_header(
+                        "Content-Disposition",
+                        "attachment",
+                        filename=filename,
+                    )
+                    msg.attach(part)
+            else:
+                # No attachments — preserve the original 'alternative' root.
+                msg = body
+                msg["Subject"] = subject
+                msg["From"] = f"{self.from_name} <{self.gmail_address}>"
+                msg["To"] = ", ".join(to)
 
             # Connect to Gmail SMTP and send
             # Use as_bytes() with UTF-8 policy to properly handle Unicode content
@@ -294,9 +341,10 @@ class GmailSender(EmailSender):
                 server.sendmail(self.gmail_address, to, email_bytes)
 
             logger.info(
-                "Gmail email sent: recipients=%s, subject=%s",
+                "Gmail email sent: recipients=%s, subject=%s, attachments=%d",
                 to,
                 subject,
+                len(attachments),
             )
 
             return {
@@ -306,6 +354,7 @@ class GmailSender(EmailSender):
                     "recipients": to,
                     "subject": subject,
                     "from": self.gmail_address,
+                    "attachment_count": len(attachments),
                 },
             }
 

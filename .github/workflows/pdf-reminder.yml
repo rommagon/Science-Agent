@@ -1,0 +1,99 @@
+name: PDF Upload Reminder (Thursday)
+
+on:
+  schedule:
+    # Every Thursday at 03:00 UTC (~3 hours before the 06:00 UTC digest
+    # send). Sends a reminder email only if pending_fetch still has rows
+    # in 'pending' status for the current week.
+    - cron: '0 3 * * 4'
+  # Keep-alive: prevent GitHub from auto-disabling after 60 days of inactivity
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/pdf-reminder.yml'
+  workflow_dispatch:
+    inputs:
+      alert_recipients:
+        description: 'Comma-separated reminder recipient emails'
+        required: false
+        default: 'rom@spotitearly.com'
+        type: string
+      top_n:
+        description: 'Max number of must-reads to consider (default: 5)'
+        required: false
+        default: '5'
+        type: string
+      min_score:
+        description: 'Minimum relevancy score threshold (default: 70)'
+        required: false
+        default: '70'
+        type: string
+
+jobs:
+  send-reminder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Send reminder for pending PDF uploads
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ai.spotitearly.com
+          EC2_USER: ubuntu
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          UPLOAD_BASE_URL: ${{ secrets.UPLOAD_BASE_URL }}
+          UNPAYWALL_EMAIL: ${{ secrets.UNPAYWALL_EMAIL }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$EC2_SSH_KEY" | xxd -r -p > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          RECIPIENTS="${{ inputs.alert_recipients || 'rom@spotitearly.com' }}"
+          TOP_N="${{ inputs.top_n || '5' }}"
+          MIN_SCORE="${{ inputs.min_score || '70' }}"
+
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
+            set -e
+            cd /home/ubuntu/sie-ai/acitracker_v1
+            git pull --ff-only origin main
+            source .venv/bin/activate
+
+            export DATABASE_URL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
+            export GMAIL_ADDRESS="$GMAIL_ADDRESS"
+            export GMAIL_APP_PASSWORD="$GMAIL_APP_PASSWORD"
+            export UPLOAD_BASE_URL="$UPLOAD_BASE_URL"
+            export UNPAYWALL_EMAIL="$UNPAYWALL_EMAIL"
+            export PYTHONUTF8=1
+            export PYTHONIOENCODING=utf-8
+
+            # Reminder mode: no fetch, no writes — just re-query pending_fetch
+            # and email if anything is still outstanding. Idempotent:
+            # send_fetch_alert returns skipped=True when pending is empty.
+            python3 -u scripts/prepare_week_pdfs.py \
+              --week this \
+              --top-n "$TOP_N" \
+              --min-score "$MIN_SCORE" \
+              --upload-base-url "\$UPLOAD_BASE_URL" \
+              --unpaywall-email "\$UNPAYWALL_EMAIL" \
+              --alert-to "$RECIPIENTS" \
+              --gmail \
+              --reminder \
+              --verbose
+          REMOTE_SCRIPT
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "## Thursday Reminder Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Reminder only sent if pending_fetch still has rows for the current week." >> $GITHUB_STEP_SUMMARY
+
+      - name: Failure notification
+        if: failure()
+        run: |
+          echo "## Thursday Reminder Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the workflow logs. Digest will still send; uploads won't be reminded." >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,50 @@
+[Unit]
+Description=SIE OA-PDF upload app (Flask/gunicorn)
+After=network.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/sie-ai/acitracker_v1
+
+# All secrets live in this EnvironmentFile (owned root:ubuntu, chmod 640).
+# Required keys:
+#   DATABASE_URL=postgresql://sie-ai:postgres@localhost:5432/sie-ai
+#   PDF_STORE_DIR=/home/ubuntu/sie-ai/pdfs
+#   ALLOWED_UPLOADER_EMAILS=rom@spotitearly.com,ops@spotitearly.com
+#   UPLOAD_APP_SECRET_KEY=<64 random hex chars>
+EnvironmentFile=/etc/sie-ai/upload-app.env
+
+# Bind loopback only — Cloudflare Tunnel is the only ingress path.
+ExecStart=/home/ubuntu/sie-ai/acitracker_v1/.venv/bin/gunicorn \
+    --workers 2 \
+    --bind 127.0.0.1:5005 \
+    --access-logfile - \
+    --error-logfile - \
+    --timeout 60 \
+    "upload_app.app:create_app()"
+
+Restart=on-failure
+RestartSec=5s
+
+# Hardening — this is an internet-facing process (via CF Tunnel).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/sie-ai/pdfs
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=upload-app
+
+[Install]
+WantedBy=multi-user.target

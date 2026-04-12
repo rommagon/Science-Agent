@@ -1,0 +1,51 @@
+{% extends "_base.html" %}
+{% block title %}Pending PDF uploads · SIE{% endblock %}
+{% block content %}
+<h1>Pending PDF uploads</h1>
+<div class="user">Week of <strong>{{ week_start }}</strong> · signed in as {{ user }}</div>
+
+{% if rows %}
+<p>The automatic OA cascade couldn't fetch these. Upload each one so the
+Thursday digest can attach the PDF.</p>
+<table>
+    <thead>
+        <tr>
+            <th>Publication</th>
+            <th>Original link</th>
+            <th>Alerted</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+        <tr>
+            <td>
+                <code>{{ row.publication_id }}</code>
+            </td>
+            <td>
+                {% if row.original_url %}
+                    <a href="{{ row.original_url }}" target="_blank" rel="noopener">original</a>
+                    &middot;
+                    <a href="https://login.proxy.library.emory.edu/login?url={{ row.original_url|urlencode }}"
+                       target="_blank" rel="noopener">via Emory</a>
+                {% else %}
+                    <span class="muted">—</span>
+                {% endif %}
+            </td>
+            <td class="muted">{{ row.alerted_at or '—' }}</td>
+            <td><a class="btn" href="{{ url_for('upload_form', pub_id=row.publication_id) }}">Upload</a></td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="empty">Nothing pending for this week. Come back on Wednesday afternoon after the OA cascade runs.</p>
+{% endif %}
+
+<h2>Upload by ID</h2>
+<p class="hint">Paste a publication ID below to force-upload a PDF even if there's no pending row.</p>
+<form action="" method="get" onsubmit="event.preventDefault(); window.location = '/upload/' + encodeURIComponent(this.pid.value);">
+    <input name="pid" type="text" placeholder="publication_id" style="padding:6px;width:260px;font-size:14px;">
+    <button class="btn" type="submit">Go</button>
+</form>
+{% endblock %}

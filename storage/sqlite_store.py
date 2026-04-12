@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_PATH = "data/db/acitrack.db"
 
 # Schema version for future migrations
-SCHEMA_VERSION = 9  # Bumped for scoring centralization columns on publications
+SCHEMA_VERSION = 10  # Bumped for pdf_store + pending_fetch tables (OA PDF pipeline)
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
@@ -132,6 +132,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         _migrate_to_v9(cursor)
         cursor.execute("INSERT INTO schema_version (version) VALUES (9)")
         current_version = 9
+
+    if current_version < 10:
+        logger.info("Migrating schema from version %d to 10", current_version)
+        _migrate_to_v10(cursor)
+        cursor.execute("INSERT INTO schema_version (version) VALUES (10)")
+        current_version = 10
 
     # Ensure credibility columns exist (idempotent check run on every init)
     _ensure_tri_model_credibility_columns(cursor)
@@ -542,6 +548,56 @@ def _migrate_to_v9(cursor: sqlite3.Cursor) -> None:
     """)
 
     logger.info("Schema migrated to version 9: added scoring centralization columns")
+
+
+def _migrate_to_v10(cursor: sqlite3.Cursor) -> None:
+    """Migrate database schema to version 10.
+
+    Adds pdf_store and pending_fetch tables supporting the Wednesday OA-PDF
+    fetch pipeline. See alembic/versions/004_add_pdf_tracking_tables.py for
+    the Postgres counterpart — schemas are kept in sync.
+
+    Args:
+        cursor: Database cursor
+    """
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pdf_store (
+            publication_id TEXT PRIMARY KEY,
+            file_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            license TEXT,
+            source_api TEXT NOT NULL,
+            bytes_len INTEGER NOT NULL,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pdf_store_fetched_at
+        ON pdf_store(fetched_at)
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pending_fetch (
+            publication_id TEXT NOT NULL,
+            week_start TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            original_url TEXT,
+            alerted_at TIMESTAMP,
+            uploaded_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (publication_id, week_start)
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pending_fetch_week_start
+        ON pending_fetch(week_start)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pending_fetch_status
+        ON pending_fetch(status)
+    """)
+
+    logger.info("Schema migrated to version 10: added pdf_store and pending_fetch tables")
 
 
 def _ensure_canonical_url_columns(cursor: sqlite3.Cursor) -> None:

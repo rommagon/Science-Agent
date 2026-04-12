@@ -1,0 +1,35 @@
+# Cloudflare Tunnel ingress snippet for the OA-PDF upload app.
+#
+# Append the first entry below to your existing /etc/cloudflared/config.yml
+# ABOVE the catch-all `service: http_status:404` rule. If the host is new,
+# also run:
+#
+#     cloudflared tunnel route dns <tunnel-name> ai.spotitearly.com
+#
+# Then reload:  sudo systemctl restart cloudflared
+
+# (Add these entries under `ingress:`.)
+- hostname: ai.spotitearly.com
+  service: http://127.0.0.1:5005
+  originRequest:
+    noTLSVerify: false
+    connectTimeout: 10s
+
+# --- Cloudflare Access policy (configure in CF dashboard, not here) ---
+#
+# Application type:  Self-hosted
+# Application domain: ai.spotitearly.com
+# Session duration:   24h
+# Policies:
+#   - Name: SIE operators
+#     Action: Allow
+#     Include: Emails → rom@spotitearly.com, ops@spotitearly.com
+#
+# Access will inject `Cf-Access-Authenticated-User-Email` on authenticated
+# requests. upload_app trusts that header and double-checks the allow-list
+# via the ALLOWED_UPLOADER_EMAILS env var.
+#
+# IMPORTANT: add a bypass policy for /healthz so cloudflared can probe it:
+#   - Path: /healthz
+#     Action: Bypass
+#     Include: Everyone

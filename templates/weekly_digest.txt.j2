@@ -21,6 +21,11 @@ Date: {{ item.published_date[:10] if item.published_date is string else (item.pu
 {% if item.link %}
 Link: {{ item.link }}
 {% endif %}
+{% if item.pdf_status == 'attached' %}
+PDF: Attached to this email{% if item.pdf_license %} ({{ item.pdf_license }}){% endif %}
+{% elif item.pdf_status == 'proxy_only' and item.proxy_url %}
+PDF: {{ item.proxy_url }}
+{% endif %}
 {% if item.thumbs_up_url and item.thumbs_down_url %}
 Feedback: 👍 {{ item.thumbs_up_url }} | 👎 {{ item.thumbs_down_url }}
 {% endif %}
