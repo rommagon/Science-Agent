@@ -1,0 +1,47 @@
+{% extends "_base.html" %}
+{% block title %}Upload · {{ pub_id }}{% endblock %}
+{% block content %}
+<h1>Upload PDF for <code>{{ pub_id }}</code></h1>
+<div class="user">Signed in as {{ user }} · <a href="{{ url_for('pending_list') }}">back to pending</a></div>
+
+{% if row.original_url %}
+<p>
+    Original link:
+    <a href="{{ row.original_url }}" target="_blank" rel="noopener">{{ row.original_url }}</a><br>
+    Emory proxy:
+    <a href="https://login.proxy.library.emory.edu/login?url={{ row.original_url|urlencode }}"
+       target="_blank" rel="noopener">open via Emory library</a>
+</p>
+{% endif %}
+
+{% if row.status == 'unknown' %}
+<div class="flash error">
+    No pending_fetch row exists for this ID this week — you're force-uploading.
+    Make sure the publication_id is correct.
+</div>
+{% endif %}
+
+<form class="upload" method="post" enctype="multipart/form-data">
+    <label>
+        PDF file
+        <input type="file" name="pdf" accept="application/pdf" required>
+    </label>
+
+    <label>
+        License (controls whether the digest may attach it directly)
+        <select name="license">
+            {% for lic in licenses %}
+                <option value="{{ lic }}" {% if lic == default_license %}selected{% endif %}>{{ lic }}</option>
+            {% endfor %}
+        </select>
+    </label>
+
+    <div class="hint" style="margin-bottom:16px">
+        <strong>cc-by / cc-by-sa / cc0 / public-domain / cc-by-nc / cc-by-nc-sa / cc-by-nc-nd</strong>
+        = digest may attach the PDF to the email. Anything else (bronze / unknown)
+        = digest will link to the Emory proxy instead.
+    </div>
+
+    <button type="submit">Upload</button>
+</form>
+{% endblock %}

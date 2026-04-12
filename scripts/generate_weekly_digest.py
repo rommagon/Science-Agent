@@ -38,7 +38,12 @@ from digest.data_access import (
     get_database_url,
 )
 from digest.feedback import build_feedback_url
+from digest.pdf_attachments import (
+    enrich_must_reads_with_pdfs,
+    finalize_pdf_statuses,
+)
 from digest.senders import get_sender, validate_sendgrid_config, validate_gmail_config
+from storage.pdf_tracking import get_connection as _pdf_get_connection
 
 # Configure logging
 logging.basicConfig(
@@ -346,6 +351,23 @@ Examples:
         help="Database URL or path (overrides DATABASE_URL env var)",
     )
 
+    # OA-PDF integration (opt-in)
+    parser.add_argument(
+        "--attach-pdfs",
+        action="store_true",
+        default=False,
+        help="Attach open-access PDFs from pdf_store to the email, show Emory "
+             "proxy links for items without an attachable PDF, and update "
+             "pending_fetch statuses after send.",
+    )
+    parser.add_argument(
+        "--upload-base-url",
+        type=str,
+        default=os.environ.get("UPLOAD_BASE_URL"),
+        help="Base URL of the upload app — used to build Emory proxy fallback "
+             "URLs (default $UPLOAD_BASE_URL). Only used with --attach-pdfs.",
+    )
+
     # Output arguments
     parser.add_argument(
         "--output-dir",
@@ -503,6 +525,25 @@ Examples:
             )
     data["feedback_enabled"] = feedback_enabled
 
+    # OA-PDF enrichment (opt-in). Runs before template render so templates
+    # can read item.pdf_status / item.proxy_url. Attachments are passed to
+    # sender.send() below; pending_fetch transitions happen post-send.
+    attachments = []
+    if args.attach_pdfs:
+        pdf_conn = _pdf_get_connection(database_url=database_url, sqlite_path=db_path)
+        try:
+            attachments = enrich_must_reads_with_pdfs(
+                must_reads=data.get("must_reads", []),
+                conn=pdf_conn,
+                upload_base_url=args.upload_base_url,
+            )
+            logger.info(
+                "OA-PDF enrichment: %d must-reads, %d attachments",
+                len(data.get("must_reads", [])), len(attachments),
+            )
+        finally:
+            pdf_conn.close()
+
     print(f"Total candidates: {data['total_candidates']}")
     print(f"Must reads selected: {len(data['must_reads'])}")
     print(f"Honorable mentions: {len(data['honorable_mentions'])}")
@@ -586,6 +627,7 @@ Examples:
             subject=subject,
             html_content=html_content,
             text_content=text_content,
+            attachments=attachments or None,
         )
 
         if result["success"]:
@@ -605,9 +647,24 @@ Examples:
             subject=subject,
             html_content=html_content,
             text_content=text_content,
+            attachments=attachments or None,
         )
         send_status = "demo"
         error = None
+
+    # Flip pending_fetch statuses now that the digest has (or would have)
+    # gone out. Only do this on a real successful send to avoid prematurely
+    # marking rows as 'cutoff' during demo/test runs.
+    if args.attach_pdfs and args.send and send_status == "success":
+        pdf_conn = _pdf_get_connection(database_url=database_url, sqlite_path=db_path)
+        try:
+            finalize_pdf_statuses(
+                conn=pdf_conn,
+                week_start=week_start,
+                must_reads=data.get("must_reads", []),
+            )
+        finally:
+            pdf_conn.close()
 
     # Log to database
     logger.info("Logging digest send to database...")

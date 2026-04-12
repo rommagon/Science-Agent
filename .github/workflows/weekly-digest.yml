@@ -49,6 +49,7 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           DIGEST_FEEDBACK_SECRET: ${{ secrets.DIGEST_FEEDBACK_SECRET }}
           DIGEST_FEEDBACK_BASE_URL: ${{ secrets.DIGEST_FEEDBACK_BASE_URL }}
+          UPLOAD_BASE_URL: ${{ secrets.UPLOAD_BASE_URL }}
         run: |
           # Write SSH key from hex-encoded secret
           mkdir -p ~/.ssh
@@ -72,6 +73,7 @@ jobs:
             export GMAIL_APP_PASSWORD="$GMAIL_APP_PASSWORD"
             export DIGEST_FEEDBACK_SECRET="$DIGEST_FEEDBACK_SECRET"
             export DIGEST_FEEDBACK_BASE_URL="$DIGEST_FEEDBACK_BASE_URL"
+            export UPLOAD_BASE_URL="$UPLOAD_BASE_URL"
             export PYTHONUTF8=1
             export PYTHONIOENCODING=utf-8
 
@@ -91,6 +93,8 @@ jobs:
               --to "$RECIPIENTS" \
               --min-score "$MIN_SCORE" \
               --top-n "$TOP_N" \
+              --attach-pdfs \
+              --upload-base-url "\$UPLOAD_BASE_URL" \
               --verbose
           REMOTE_SCRIPT
 
