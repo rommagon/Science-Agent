@@ -8,7 +8,7 @@ This module provides configuration for the experimental tri-model review system:
 Environment Variables:
 - TRI_MODEL_MINI_DAILY: Enable tri-model mini-daily run (default: false)
 - CLAUDE_API_KEY: Anthropic Claude API key
-- CLAUDE_MODEL: Claude model name (default: claude-3-haiku-20240307)
+- CLAUDE_MODEL: Claude model name (default: claude-haiku-4-5-20251001)
 - GEMINI_API_KEY: Google Gemini API key
 - GEMINI_MODEL: Gemini model name (default: gemini-2.0-flash)
 - MINI_DAILY_WINDOW_HOURS: Lookback window in hours (default: 6)
@@ -82,7 +82,7 @@ CLAUDE_API_KEY = sanitize_secret(os.getenv("CLAUDE_API_KEY"))
 GEMINI_API_KEY = sanitize_secret(os.getenv("GEMINI_API_KEY"))
 
 # Model names
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-3-haiku-20240307")  # Haiku for cost savings
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")  # Haiku 4.5 for cost savings
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # Mini-daily parameters
@@ -102,6 +102,9 @@ else:
 # Timeouts and retries
 REVIEW_TIMEOUT_SECONDS = 30
 MAX_REVIEW_RETRIES = 2
+# Gemini gets more attempts because 429s on shared capacity are common and transient
+GEMINI_MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "4"))
+GEMINI_RATE_LIMIT_BACKOFF_BASE_SECONDS = float(os.getenv("GEMINI_RATE_LIMIT_BACKOFF_BASE_SECONDS", "2.0"))
 
 
 def is_tri_model_enabled() -> bool:

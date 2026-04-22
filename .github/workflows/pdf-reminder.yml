@@ -17,7 +17,7 @@ on:
       alert_recipients:
         description: 'Comma-separated reminder recipient emails'
         required: false
-        default: 'rom@spotitearly.com'
+        default: 'research@spotitearly.com,rom@spotitearly.com'
         type: string
       top_n:
         description: 'Max number of must-reads to consider (default: 5)'
@@ -51,7 +51,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          RECIPIENTS="${{ inputs.alert_recipients || 'rom@spotitearly.com' }}"
+          RECIPIENTS="${{ inputs.alert_recipients || 'research@spotitearly.com,rom@spotitearly.com' }}"
           TOP_N="${{ inputs.top_n || '5' }}"
           MIN_SCORE="${{ inputs.min_score || '70' }}"
 

@@ -20,6 +20,8 @@ from config.tri_model_config import (
     GEMINI_REVIEW_VERSION,
     REVIEW_TIMEOUT_SECONDS,
     MAX_REVIEW_RETRIES,
+    GEMINI_MAX_RETRIES,
+    GEMINI_RATE_LIMIT_BACKOFF_BASE_SECONDS,
 )
 from tri_model.prompts import get_claude_prompt, get_gemini_prompt
 from tri_model.text_sanitize import sanitize_for_llm, sanitize_paper_for_review
@@ -156,7 +158,7 @@ def claude_review(paper: Dict) -> Dict:
             sanitized_prompt = sanitized_prompt.encode("utf-8", "replace").decode("utf-8")
 
             # Model fallback: Try preferred model, then fallbacks if 404 not_found_error
-            models_to_try = [CLAUDE_MODEL, "claude-3-haiku-20240307", "claude-3-5-sonnet-20241022"]
+            models_to_try = [CLAUDE_MODEL, "claude-haiku-4-5-20251001", "claude-sonnet-4-6"]
             model_used = None
             last_error = None
 
@@ -333,7 +335,7 @@ def gemini_review(paper: Dict) -> Dict:
     parsed_review = None
     parse_errors = []
 
-    for attempt in range(MAX_REVIEW_RETRIES):
+    for attempt in range(GEMINI_MAX_RETRIES):
         try:
             try:
                 from importlib import metadata as importlib_metadata
@@ -357,7 +359,7 @@ def gemini_review(paper: Dict) -> Dict:
             genai.configure(api_key=GEMINI_API_KEY)
             model = genai.GenerativeModel(GEMINI_MODEL)
 
-            logger.info("Calling Gemini API (attempt %d/%d) for: %s", attempt + 1, MAX_REVIEW_RETRIES, title[:80])
+            logger.info("Calling Gemini API (attempt %d/%d) for: %s", attempt + 1, GEMINI_MAX_RETRIES, title[:80])
 
             # Final message sanitization before API call
             sanitized_prompt = sanitize_for_llm(prompt)
@@ -412,7 +414,7 @@ def gemini_review(paper: Dict) -> Dict:
                 pass  # Don't let diagnostic fail the error handling
 
             logger.warning("Gemini API call failed on attempt %d: %s", attempt + 1, str(e))
-            if attempt == MAX_REVIEW_RETRIES - 1:
+            if attempt == GEMINI_MAX_RETRIES - 1:
                 # Last attempt failed
                 latency_ms = int((time.time() - start_time) * 1000)
                 return {
@@ -421,9 +423,23 @@ def gemini_review(paper: Dict) -> Dict:
                     "model": GEMINI_MODEL,
                     "version": GEMINI_REVIEW_VERSION,
                     "latency_ms": latency_ms,
-                    "error": f"API error after {MAX_REVIEW_RETRIES} attempts: {str(e)}",
+                    "error": f"API error after {GEMINI_MAX_RETRIES} attempts: {str(e)}",
                     "reviewed_at": datetime.now().isoformat(),
                 }
+
+            # Exponential backoff on 429 / resource-exhausted so transient
+            # shared-capacity spikes don't consume all retries in one burst.
+            err_str = str(e).lower()
+            is_rate_limited = (
+                "429" in err_str
+                or "resource exhausted" in err_str
+                or "rate limit" in err_str
+                or "quota" in err_str
+            )
+            if is_rate_limited:
+                sleep_s = GEMINI_RATE_LIMIT_BACKOFF_BASE_SECONDS * (2 ** attempt)
+                logger.info("Gemini 429 detected; backing off %.1fs before retry", sleep_s)
+                time.sleep(sleep_s)
 
     latency_ms = int((time.time() - start_time) * 1000)
 
