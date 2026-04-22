@@ -5,18 +5,12 @@ on:
     # Every Wednesday at 18:00 UTC (2:00pm EST, 1:00pm EDT) — about
     # 12 hours before the Thursday digest send at 06:00 UTC.
     - cron: '0 18 * * 3'
-  # Keep-alive: prevent GitHub from auto-disabling after 60 days of inactivity
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/prepare-week-pdfs.yml'
   workflow_dispatch:
     inputs:
       alert_recipients:
         description: 'Comma-separated alert recipient emails'
         required: false
-        default: 'research@spotitearly.com,rom@spotitearly.com'
+        default: 'rom@spotitearly.com'
         type: string
       min_score:
         description: 'Minimum relevancy score threshold (default: 70)'
@@ -56,7 +50,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          RECIPIENTS="${{ inputs.alert_recipients || 'research@spotitearly.com,rom@spotitearly.com' }}"
+          RECIPIENTS="${{ inputs.alert_recipients || 'rom@spotitearly.com' }}"
           MIN_SCORE="${{ inputs.min_score || '70' }}"
           TOP_N="${{ inputs.top_n || '5' }}"
           DRY_RUN="${{ inputs.dry_run || 'false' }}"

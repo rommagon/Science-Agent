@@ -5,12 +5,6 @@ on:
     # Run every Thursday at 06:00 UTC (1:00am EST)
     # Looks back 7 days from run time
     - cron: '0 6 * * 4'
-  # Keep-alive: prevent GitHub from auto-disabling after 60 days of inactivity
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/weekly-digest.yml'
   workflow_dispatch:
     inputs:
       lookback_days:
