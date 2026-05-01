@@ -87,8 +87,6 @@ jobs:
               --to "$RECIPIENTS" \
               --min-score "$MIN_SCORE" \
               --top-n "$TOP_N" \
-              --attach-pdfs \
-              --upload-base-url "\$UPLOAD_BASE_URL" \
               --verbose
           REMOTE_SCRIPT
 
