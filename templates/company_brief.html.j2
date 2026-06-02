@@ -32,9 +32,11 @@
         .intro-sub { font-size: 14px; line-height: 1.6; color: #6b7280; margin: 0 0 28px 0; padding-bottom: 24px; border-bottom: 1px solid #f3f4f6; }
 
         /* Section */
-        .brief-section { margin-bottom: 36px; }
-        .section-label { font-size: 11px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 4px; }
-        .section-rule { height: 2px; background-color: #1a1a1a; width: 28px; margin-bottom: 20px; }
+        .brief-section { margin-bottom: 40px; }
+        .section-head { margin-bottom: 20px; }
+        .section-num { font-family: 'Georgia', serif; font-size: 15px; font-weight: 700; margin-right: 9px; }
+        .section-label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; }
+        .section-rule { height: 3px; width: 100%; margin-top: 11px; border-radius: 2px; }
         .section-narrative { font-size: 14px; line-height: 1.6; color: #4b5563; margin: 0 0 20px 0; }
 
         /* Item card */
@@ -107,10 +109,14 @@
                             <h1 class="intro-title">This Week at SpotitEarly</h1>
                             <p class="intro-sub">Science, grants, and regulatory &mdash; your weekly read, in one place.</p>
 
+                            {% set accents = {'science_agent': '#2563eb', 'grant_agent': '#16a34a', 'regulatory_tool': '#db2777'} %}
                             {% for section in sections %}
+                            {% set accent = accents.get(section['tool_id'], '#1a1a1a') %}
                             <div class="brief-section">
-                                <div class="section-label">{{ section.section_title }}</div>
-                                <div class="section-rule"></div>
+                                <div class="section-head">
+                                    <span class="section-num" style="color:{{ accent }};">{{ "%02d"|format(loop.index) }}</span><span class="section-label" style="color:{{ accent }};">{{ section.section_title }}</span>
+                                    <div class="section-rule" style="background-color:{{ accent }};"></div>
+                                </div>
 
                                 {% if section.narrative %}
                                 <p class="section-narrative">{{ section.narrative }}</p>

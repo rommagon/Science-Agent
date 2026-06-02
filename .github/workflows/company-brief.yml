@@ -9,9 +9,10 @@ name: Company Brief Email
 
 on:
   schedule:
-    # Mondays 12:00 UTC (~08:00 ET) — start-of-week briefing. Single weekly
+    # Thursday 06:00 UTC (1:00am EST) — matches the slot the Science Agent
+    # weekly digest used before it was folded into this brief. Single weekly
     # slot; change this one line to reschedule.
-    - cron: '0 12 * * 1'
+    - cron: '0 6 * * 4'
   workflow_dispatch:
     inputs:
       recipients:
