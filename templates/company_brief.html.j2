@@ -1,188 +1,184 @@
 <!DOCTYPE html>
-<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta name="color-scheme" content="light">
-  <meta name="supported-color-schemes" content="light">
-  <title>SpotitEarly Company Brief — {{ period_start }}–{{ period_end }}</title>
-  <!--[if mso]>
-  <noscript>
-    <xml>
-      <o:OfficeDocumentSettings>
-        <o:PixelsPerInch>96</o:PixelsPerInch>
-      </o:OfficeDocumentSettings>
-    </xml>
-  </noscript>
-  <![endif]-->
-  <style>
-    body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
-    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
-    img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
-    body { margin: 0; padding: 0; width: 100% !important; height: 100% !important; background-color: #FAFAFA; }
-    a { color: #C42A6E; }
-    @media only screen and (max-width: 620px) {
-      .email-container { width: 100% !important; max-width: 100% !important; }
-      .mobile-pad { padding-left: 16px !important; padding-right: 16px !important; }
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>SpotitEarly Company Brief — {{ period_start }} to {{ period_end }}</title>
+    <!--[if mso]>
+    <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+    <![endif]-->
+    <style type="text/css">
+        body, table, td, p, a, li { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+        table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+        body { margin: 0; padding: 0; width: 100% !important; height: 100% !important; background-color: #f8f9fa; font-family: 'Georgia', 'Times New Roman', serif; }
+        .container { max-width: 640px; margin: 0 auto; background-color: #ffffff; }
+
+        /* Header */
+        .header { background-color: #ffffff; padding: 32px 40px 24px 40px; border-bottom: 1px solid #e8e8e8; }
+        .logo-section { text-align: center; margin-bottom: 16px; }
+        .brand-dots { font-size: 18px; letter-spacing: 2px; margin-bottom: 8px; }
+        .dot-blue { color: #2563eb; } .dot-green { color: #22c55e; } .dot-yellow { color: #eab308; }
+        .dot-red { color: #ef4444; } .dot-pink { color: #ec4899; } .dot-cyan { color: #06b6d4; }
+        .brand-name { font-family: 'Georgia', serif; font-size: 28px; font-weight: 400; color: #1a1a1a; letter-spacing: -0.5px; }
+        .brand-name .highlight { color: #ef4444; font-weight: 700; }
+        .digest-title { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 1.5px; text-align: center; margin-top: 14px; }
+        .week-range { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; color: #9ca3af; text-align: center; margin-top: 4px; }
+        .preheader { display: none !important; visibility: hidden; opacity: 0; color: transparent; height: 0; width: 0; }
+
+        /* Content */
+        .content { padding: 32px 40px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .intro-title { font-family: 'Georgia', serif; font-size: 22px; font-weight: 400; color: #1a1a1a; margin: 0 0 6px 0; }
+        .intro-sub { font-size: 14px; line-height: 1.6; color: #6b7280; margin: 0 0 28px 0; padding-bottom: 24px; border-bottom: 1px solid #f3f4f6; }
+
+        /* Section */
+        .brief-section { margin-bottom: 36px; }
+        .section-label { font-size: 11px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 4px; }
+        .section-rule { height: 2px; background-color: #1a1a1a; width: 28px; margin-bottom: 20px; }
+        .section-narrative { font-size: 14px; line-height: 1.6; color: #4b5563; margin: 0 0 20px 0; }
+
+        /* Item card */
+        .item-card { margin-bottom: 26px; padding-bottom: 26px; border-bottom: 1px solid #f3f4f6; }
+        .item-card:last-of-type { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        .item-title { font-family: 'Georgia', 'Times New Roman', serif; font-size: 18px; font-weight: 400; color: #1a1a1a; margin: 0 0 8px 0; line-height: 1.4; }
+        .item-title a { color: #1a1a1a; text-decoration: none; border-bottom: 1px solid #c0392b; }
+        .item-title a:hover { border-bottom-color: #ef4444; }
+        .item-meta { font-size: 13px; color: #6b7280; margin-bottom: 14px; }
+        .item-meta strong { color: #4b5563; }
+
+        /* Badges */
+        .badges { margin-bottom: 14px; }
+        .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 3px; margin-right: 8px; margin-bottom: 4px; font-family: -apple-system, 'Segoe UI', Arial, sans-serif; }
+        .badge-score { background-color: #1a1a1a; color: #ffffff; }
+        .badge-tag { background-color: #f3f4f6; color: #4b5563; }
+        .badge-urgent { background-color: #fef2f2; color: #c0392b; border: 1px solid #fecaca; }
+
+        /* Summary */
+        .summary-box { font-size: 14px; line-height: 1.7; color: #374151; padding: 14px 18px; background-color: #fafafa; border-left: 3px solid #1a1a1a; }
+        .next-step { font-size: 13px; color: #4b5563; margin-top: 10px; }
+        .next-step strong { color: #1a1a1a; }
+        .empty-note { font-size: 14px; color: #9ca3af; font-style: italic; }
+
+        /* Footer */
+        .footer { background-color: #fafafa; padding: 28px 40px; border-top: 1px solid #e8e8e8; text-align: center; }
+        .footer-meta { font-size: 12px; color: #6b7280; line-height: 1.6; margin-bottom: 18px; }
+        .footer-brand-name { font-family: 'Georgia', serif; font-size: 16px; color: #9ca3af; }
+        .footer-brand-name .highlight { color: #ef4444; }
+        .footer-tagline { font-size: 11px; color: #9ca3af; margin-top: 4px; }
+
+        @media screen and (max-width: 640px) {
+            .container { width: 100% !important; }
+            .content, .header, .footer { padding: 24px 20px !important; }
+            .item-title { font-size: 16px !important; }
+            .brand-name { font-size: 24px !important; }
+        }
+    </style>
 </head>
-<body style="margin:0; padding:0; background-color:#FAFAFA; font-family:'Inter','Helvetica Neue',Helvetica,Arial,sans-serif;">
+<body>
+    <span class="preheader">This week at SpotitEarly — Science, grants, and regulatory in one read ({{ period_start }} to {{ period_end }}).</span>
 
-  <div style="display:none; font-size:1px; color:#FAFAFA; line-height:1px; max-height:0; max-width:0; opacity:0; overflow:hidden;">
-    Your weekly SpotitEarly Company Brief — Science, Grants, and Regulatory in one read ({{ period_start }}–{{ period_end }}).
-  </div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#f8f9fa;">
+        <tr>
+            <td align="center" style="padding: 24px 16px;">
+                <table role="presentation" class="container" width="640" cellspacing="0" cellpadding="0" border="0" style="background-color:#ffffff; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
 
-  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#FAFAFA;">
-    <tr>
-      <td align="center" style="padding: 24px 8px;">
-
-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" class="email-container" style="max-width:600px; margin:0 auto;">
-
-          <!-- HEADER BAR -->
-          <tr>
-            <td style="background: linear-gradient(135deg, #C42A6E 0%, #8E1D4E 100%); padding: 24px 32px; border-radius: 12px 12px 0 0;" class="mobile-pad">
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-                <tr>
-                  <td valign="middle">
-                    <span style="font-family:Georgia,'Times New Roman',serif; font-size:20px; font-weight:700; color:#FFFFFF; line-height:1.2;">SpotitEarly</span><br>
-                    <span style="font-family:'Inter','Helvetica Neue',sans-serif; font-size:11px; font-weight:600; color:rgba(255,255,255,0.7); letter-spacing:2px; text-transform:uppercase;">Company Brief</span>
-                  </td>
-                  <td align="right" valign="middle">
-                    <span style="font-family:'Inter','Helvetica Neue',sans-serif; font-size:13px; color:rgba(255,255,255,0.85);">{{ period_start }} &ndash; {{ period_end }}</span>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <!-- MAIN CONTENT CARD -->
-          <tr>
-            <td style="background-color:#FFFFFF; padding:0; border-left:1px solid #EBEBEB; border-right:1px solid #EBEBEB;">
-
-              <!-- INTRO -->
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-                <tr>
-                  <td style="padding: 28px 32px 4px 32px;" class="mobile-pad">
-                    <h1 style="margin:0 0 6px 0; font-family:Georgia,'Times New Roman',serif; font-size:24px; font-weight:700; color:#2D2D2D; line-height:1.25;">This week at SpotitEarly</h1>
-                    <p style="margin:0; font-family:'Inter','Helvetica Neue',sans-serif; font-size:14px; color:#9B9B9B; line-height:1.5;">
-                      Science, grants, and regulatory — your weekly read.
-                    </p>
-                  </td>
-                </tr>
-              </table>
-
-              {% for section in sections %}
-
-              <!-- divider between sections -->
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-                <tr><td style="padding:24px 32px 0 32px;" class="mobile-pad"><div style="border-top:1px solid #EBEBEB;"></div></td></tr>
-              </table>
-
-              <!-- SECTION HEADER -->
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-                <tr>
-                  <td style="padding: 22px 32px 8px 32px;" class="mobile-pad">
-                    <h2 style="margin:0; font-family:Georgia,'Times New Roman',serif; font-size:18px; font-weight:700; color:#2D2D2D; line-height:1.2;">{{ section.section_title }}</h2>
-                    {% if section.narrative %}
-                    <p style="margin:8px 0 0 0; font-family:'Inter','Helvetica Neue',sans-serif; font-size:14px; color:#555555; line-height:1.6;">{{ section.narrative }}</p>
-                    {% endif %}
-                  </td>
-                </tr>
-              </table>
-
-              {% if not section['items'] %}
-              <!-- EMPTY SECTION -->
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-                <tr>
-                  <td style="padding: 6px 32px 8px 32px;" class="mobile-pad">
-                    <p style="margin:0; font-family:'Inter','Helvetica Neue',sans-serif; font-size:14px; color:#9B9B9B; font-style:italic; line-height:1.5;">No new items this week.</p>
-                  </td>
-                </tr>
-              </table>
-              {% else %}
-
-              {% for item in section['items'] %}
-              {% set impact = (item.meta.impact or item.meta.badge or '') | lower %}
-              {% set is_urgent = impact == 'high' %}
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-                <tr>
-                  <td style="padding: 6px 32px;" class="mobile-pad">
-                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#F7F7F8; border-radius:8px; border-left:4px solid {{ '#E85A5A' if is_urgent else '#C42A6E' }};">
-                      <tr>
-                        <td style="padding: 14px 18px;">
-                          {% if item.url %}
-                          <a href="{{ item.url }}" target="_blank" style="font-family:'Inter','Helvetica Neue',sans-serif; font-size:15px; font-weight:600; color:#2D2D2D; line-height:1.4; text-decoration:none;">{{ item.title }}</a>
-                          {% else %}
-                          <span style="font-family:'Inter','Helvetica Neue',sans-serif; font-size:15px; font-weight:600; color:#2D2D2D; line-height:1.4;">{{ item.title }}</span>
-                          {% endif %}
-                          {% if item.summary %}
-                          <p style="margin:6px 0 0 0; font-family:'Inter','Helvetica Neue',sans-serif; font-size:14px; color:#555555; line-height:1.55;">{{ item.summary }}</p>
-                          {% endif %}
-
-                          {# meta pills #}
-                          <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:9px;">
-                            <tr>
-                              {% if item.meta.badge %}
-                              <td style="padding-right:8px;"><span style="display:inline-block; background-color:{{ '#FFEBEE' if is_urgent else '#FCE4EC' }}; color:{{ '#E85A5A' if is_urgent else '#C42A6E' }}; font-family:'Inter',sans-serif; font-size:11px; font-weight:700; padding:4px 12px; border-radius:100px;">{{ item.meta.badge }}</span></td>
-                              {% endif %}
-                              {% if item.meta.score is not none %}
-                              <td style="padding-right:8px;"><span style="display:inline-block; background-color:#E3F2FD; color:#4A7FB5; font-family:'Inter',sans-serif; font-size:11px; font-weight:700; padding:4px 12px; border-radius:100px;">Score {{ item.meta.score }}</span></td>
-                              {% endif %}
-                              {% if item.meta.deadline %}
-                              <td style="padding-right:8px;"><span style="display:inline-block; background-color:#FFF8E1; color:#C8850A; font-family:'Inter',sans-serif; font-size:11px; font-weight:700; padding:4px 12px; border-radius:100px;">Due {{ item.meta.deadline }}{% if item.meta.days_to_deadline is not none %} ({{ item.meta.days_to_deadline }}d){% endif %}</span></td>
-                              {% endif %}
-                            </tr>
-                          </table>
-
-                          {% if item.meta.funder or item.meta.source or item.meta.next_step %}
-                          <p style="margin:8px 0 0 0; font-family:'Inter','Helvetica Neue',sans-serif; font-size:12px; color:#9B9B9B; line-height:1.5;">
-                            {%- if item.meta.funder %}{{ item.meta.funder }}{% elif item.meta.source %}{{ item.meta.source }}{% endif -%}
-                            {%- if item.meta.next_step %} &middot; <span style="color:#555555;">Next: {{ item.meta.next_step }}</span>{% endif -%}
-                          </p>
-                          {% endif %}
+                    <!-- Header -->
+                    <tr>
+                        <td class="header">
+                            <div class="logo-section">
+                                <div class="brand-dots">
+                                    <span class="dot-blue">&#9679;</span>
+                                    <span class="dot-green">&#9679;</span>
+                                    <span class="dot-yellow">&#9679;</span>
+                                    <span class="dot-red">&#10005;</span>
+                                    <span class="dot-pink">&#9679;</span>
+                                    <span class="dot-cyan">&#9679;</span>
+                                </div>
+                                <div class="brand-name">spot it <span class="highlight">early</span></div>
+                            </div>
+                            <div class="digest-title">Company Brief</div>
+                            <div class="week-range">{{ period_start }} &mdash; {{ period_end }}</div>
                         </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-              {% endfor %}
+                    </tr>
 
-              {% endif %}
-              {% endfor %}
+                    <!-- Content -->
+                    <tr>
+                        <td class="content">
+                            <h1 class="intro-title">This Week at SpotitEarly</h1>
+                            <p class="intro-sub">Science, grants, and regulatory &mdash; your weekly read, in one place.</p>
 
-              <tr><td style="padding-bottom:20px;"></td></tr>
+                            {% for section in sections %}
+                            <div class="brief-section">
+                                <div class="section-label">{{ section.section_title }}</div>
+                                <div class="section-rule"></div>
 
+                                {% if section.narrative %}
+                                <p class="section-narrative">{{ section.narrative }}</p>
+                                {% endif %}
+
+                                {% if not section['items'] %}
+                                <p class="empty-note">No new items this week.</p>
+                                {% else %}
+
+                                {% for item in section['items'] %}
+                                {% set meta = item.meta %}
+                                {% set is_urgent = ((meta.get('impact') or '')|lower == 'high') or ((meta.get('badge') or '')|upper == 'HIGH') %}
+                                {% set primary = meta.get('funder') or meta.get('source') %}
+                                {% set m_date = meta.get('date') %}
+                                {% set m_deadline = meta.get('deadline') %}
+                                {% set m_days = meta.get('days_to_deadline') %}
+                                {% set m_score = meta.get('score') %}
+                                {% set m_badge = meta.get('badge') %}
+                                <div class="item-card">
+                                    <h3 class="item-title">
+                                        {% if item.url %}<a href="{{ item.url }}" target="_blank">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}
+                                    </h3>
+
+                                    {% if primary or m_date or m_deadline %}
+                                    <div class="item-meta">
+                                        {%- if primary %}{{ primary }}{% endif -%}
+                                        {%- if m_date %}{% if primary %} &bull; {% endif %}{{ m_date }}{% endif -%}
+                                        {%- if m_deadline %} &bull; <strong>Deadline {{ m_deadline }}</strong>{% if m_days is not none %} ({{ m_days }} days){% endif %}{% endif -%}
+                                    </div>
+                                    {% endif %}
+
+                                    {% if m_score is not none or m_badge %}
+                                    <div class="badges">
+                                        {% if m_score is not none %}<span class="badge badge-score">{{ m_score|int }}/100</span>{% endif %}
+                                        {% if m_badge %}<span class="badge {{ 'badge-urgent' if is_urgent else 'badge-tag' }}">{{ m_badge }}</span>{% endif %}
+                                    </div>
+                                    {% endif %}
+
+                                    {% if item.summary %}
+                                    <div class="summary-box">{{ item.summary }}</div>
+                                    {% endif %}
+
+                                    {% if meta.get('next_step') %}
+                                    <p class="next-step"><strong>Next step:</strong> {{ meta.get('next_step') }}</p>
+                                    {% endif %}
+                                </div>
+                                {% endfor %}
+
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td class="footer">
+                            <div class="footer-meta">
+                                Auto-generated by <strong>SpotitEarly</strong> &mdash; the Science, Grant, and Regulatory agents, combined into one weekly brief.
+                            </div>
+                            <div class="footer-brand-name">spot it <span class="highlight">early</span></div>
+                            <div class="footer-tagline">Advancing cancer early detection</div>
+                        </td>
+                    </tr>
+
+                </table>
             </td>
-          </tr>
-
-          <!-- FOOTER -->
-          <tr>
-            <td style="background-color:#F0F0F2; padding: 24px 32px; border-radius: 0 0 12px 12px; border-left:1px solid #EBEBEB; border-right:1px solid #EBEBEB; border-bottom:1px solid #EBEBEB;" class="mobile-pad">
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-                <tr>
-                  <td>
-                    <p style="margin:0; font-family:'Inter','Helvetica Neue',sans-serif; font-size:13px; color:#9B9B9B; line-height:1.6;">
-                      This brief was auto-generated by <span style="color:#C42A6E; font-weight:600;">SpotitEarly</span> &mdash; Science, Grant, and Regulatory agents, combined weekly.
-                    </p>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding-top:14px;">
-                    <a href="https://spotitearly.com" style="font-family:'Inter','Helvetica Neue',sans-serif; font-size:12px; color:#9B9B9B; text-decoration:underline;">spotitearly.com</a>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-        </table>
-
-      </td>
-    </tr>
-  </table>
-
+        </tr>
+    </table>
 </body>
 </html>

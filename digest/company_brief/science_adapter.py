@@ -9,8 +9,8 @@ shared brief-section contract — no HTTP round-trip.
 from __future__ import annotations
 
 import logging
-from datetime import date
-from typing import Optional
+from datetime import date, datetime
+from typing import Any, Optional
 
 from digest.data_access import get_publications_for_week
 
@@ -19,6 +19,24 @@ from .contract import SCIENCE, BriefSection, empty_section
 logger = logging.getLogger(__name__)
 
 SECTION_TITLE = "Science: Cancer Early-Detection Research"
+
+
+def _fmt_date(value: Any) -> Optional[str]:
+    """Format a publication date as 'Mon D, YYYY' (e.g. May 29, 2026).
+
+    Accepts a date/datetime or an ISO-ish string; returns None when there's
+    nothing renderable.
+    """
+    if not value:
+        return None
+    if isinstance(value, (date, datetime)):
+        d = value
+    else:
+        try:
+            d = datetime.fromisoformat(str(value)[:10])
+        except ValueError:
+            return str(value)[:10] or None
+    return f"{d.strftime('%b')} {d.day}, {d.year}"
 
 
 def build_science_section(
@@ -64,6 +82,7 @@ def build_science_section(
                     "badge": pub.get("relevancy_ordinal"),
                     "score": round(score, 1) if isinstance(score, (int, float)) else None,
                     "source": pub.get("venue") or pub.get("source"),
+                    "date": _fmt_date(pub.get("published_date")),
                 },
             }
         )

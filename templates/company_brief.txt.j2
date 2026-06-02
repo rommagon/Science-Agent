@@ -21,7 +21,7 @@ No new items this week.
 {% endif %}
 {% if item.meta.badge or item.meta.score is not none or item.meta.deadline %}  [{% if item.meta.badge %}{{ item.meta.badge }}{% endif %}{% if item.meta.score is not none %} · Score {{ item.meta.score }}{% endif %}{% if item.meta.deadline %} · Due {{ item.meta.deadline }}{% if item.meta.days_to_deadline is not none %} ({{ item.meta.days_to_deadline }}d){% endif %}{% endif %}]
 {% endif %}
-{% if item.meta.funder or item.meta.source %}  {{ item.meta.funder or item.meta.source }}
+{% if item.meta.funder or item.meta.source or item.meta.date %}  {{ item.meta.funder or item.meta.source }}{% if item.meta.date %}{% if item.meta.funder or item.meta.source %} · {% endif %}{{ item.meta.date }}{% endif %}
 {% endif %}
 {% endfor %}
 {% endif %}
