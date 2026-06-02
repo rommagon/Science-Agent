@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+  <title>SpotitEarly Company Brief — {{ period_start }}–{{ period_end }}</title>
+  <!--[if mso]>
+  <noscript>
+    <xml>
+      <o:OfficeDocumentSettings>
+        <o:PixelsPerInch>96</o:PixelsPerInch>
+      </o:OfficeDocumentSettings>
+    </xml>
+  </noscript>
+  <![endif]-->
+  <style>
+    body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
+    body { margin: 0; padding: 0; width: 100% !important; height: 100% !important; background-color: #FAFAFA; }
+    a { color: #C42A6E; }
+    @media only screen and (max-width: 620px) {
+      .email-container { width: 100% !important; max-width: 100% !important; }
+      .mobile-pad { padding-left: 16px !important; padding-right: 16px !important; }
+    }
+  </style>
+</head>
+<body style="margin:0; padding:0; background-color:#FAFAFA; font-family:'Inter','Helvetica Neue',Helvetica,Arial,sans-serif;">
+
+  <div style="display:none; font-size:1px; color:#FAFAFA; line-height:1px; max-height:0; max-width:0; opacity:0; overflow:hidden;">
+    Your weekly SpotitEarly Company Brief — Science, Grants, and Regulatory in one read ({{ period_start }}–{{ period_end }}).
+  </div>
+
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#FAFAFA;">
+    <tr>
+      <td align="center" style="padding: 24px 8px;">
+
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" class="email-container" style="max-width:600px; margin:0 auto;">
+
+          <!-- HEADER BAR -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #C42A6E 0%, #8E1D4E 100%); padding: 24px 32px; border-radius: 12px 12px 0 0;" class="mobile-pad">
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                <tr>
+                  <td valign="middle">
+                    <span style="font-family:Georgia,'Times New Roman',serif; font-size:20px; font-weight:700; color:#FFFFFF; line-height:1.2;">SpotitEarly</span><br>
+                    <span style="font-family:'Inter','Helvetica Neue',sans-serif; font-size:11px; font-weight:600; color:rgba(255,255,255,0.7); letter-spacing:2px; text-transform:uppercase;">Company Brief</span>
+                  </td>
+                  <td align="right" valign="middle">
+                    <span style="font-family:'Inter','Helvetica Neue',sans-serif; font-size:13px; color:rgba(255,255,255,0.85);">{{ period_start }} &ndash; {{ period_end }}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- MAIN CONTENT CARD -->
+          <tr>
+            <td style="background-color:#FFFFFF; padding:0; border-left:1px solid #EBEBEB; border-right:1px solid #EBEBEB;">
+
+              <!-- INTRO -->
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                <tr>
+                  <td style="padding: 28px 32px 4px 32px;" class="mobile-pad">
+                    <h1 style="margin:0 0 6px 0; font-family:Georgia,'Times New Roman',serif; font-size:24px; font-weight:700; color:#2D2D2D; line-height:1.25;">This week at SpotitEarly</h1>
+                    <p style="margin:0; font-family:'Inter','Helvetica Neue',sans-serif; font-size:14px; color:#9B9B9B; line-height:1.5;">
+                      Science, grants, and regulatory — your weekly read.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              {% for section in sections %}
+
+              <!-- divider between sections -->
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                <tr><td style="padding:24px 32px 0 32px;" class="mobile-pad"><div style="border-top:1px solid #EBEBEB;"></div></td></tr>
+              </table>
+
+              <!-- SECTION HEADER -->
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                <tr>
+                  <td style="padding: 22px 32px 8px 32px;" class="mobile-pad">
+                    <h2 style="margin:0; font-family:Georgia,'Times New Roman',serif; font-size:18px; font-weight:700; color:#2D2D2D; line-height:1.2;">{{ section.section_title }}</h2>
+                    {% if section.narrative %}
+                    <p style="margin:8px 0 0 0; font-family:'Inter','Helvetica Neue',sans-serif; font-size:14px; color:#555555; line-height:1.6;">{{ section.narrative }}</p>
+                    {% endif %}
+                  </td>
+                </tr>
+              </table>
+
+              {% if not section['items'] %}
+              <!-- EMPTY SECTION -->
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                <tr>
+                  <td style="padding: 6px 32px 8px 32px;" class="mobile-pad">
+                    <p style="margin:0; font-family:'Inter','Helvetica Neue',sans-serif; font-size:14px; color:#9B9B9B; font-style:italic; line-height:1.5;">No new items this week.</p>
+                  </td>
+                </tr>
+              </table>
+              {% else %}
+
+              {% for item in section['items'] %}
+              {% set impact = (item.meta.impact or item.meta.badge or '') | lower %}
+              {% set is_urgent = impact == 'high' %}
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                <tr>
+                  <td style="padding: 6px 32px;" class="mobile-pad">
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#F7F7F8; border-radius:8px; border-left:4px solid {{ '#E85A5A' if is_urgent else '#C42A6E' }};">
+                      <tr>
+                        <td style="padding: 14px 18px;">
+                          {% if item.url %}
+                          <a href="{{ item.url }}" target="_blank" style="font-family:'Inter','Helvetica Neue',sans-serif; font-size:15px; font-weight:600; color:#2D2D2D; line-height:1.4; text-decoration:none;">{{ item.title }}</a>
+                          {% else %}
+                          <span style="font-family:'Inter','Helvetica Neue',sans-serif; font-size:15px; font-weight:600; color:#2D2D2D; line-height:1.4;">{{ item.title }}</span>
+                          {% endif %}
+                          {% if item.summary %}
+                          <p style="margin:6px 0 0 0; font-family:'Inter','Helvetica Neue',sans-serif; font-size:14px; color:#555555; line-height:1.55;">{{ item.summary }}</p>
+                          {% endif %}
+
+                          {# meta pills #}
+                          <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:9px;">
+                            <tr>
+                              {% if item.meta.badge %}
+                              <td style="padding-right:8px;"><span style="display:inline-block; background-color:{{ '#FFEBEE' if is_urgent else '#FCE4EC' }}; color:{{ '#E85A5A' if is_urgent else '#C42A6E' }}; font-family:'Inter',sans-serif; font-size:11px; font-weight:700; padding:4px 12px; border-radius:100px;">{{ item.meta.badge }}</span></td>
+                              {% endif %}
+                              {% if item.meta.score is not none %}
+                              <td style="padding-right:8px;"><span style="display:inline-block; background-color:#E3F2FD; color:#4A7FB5; font-family:'Inter',sans-serif; font-size:11px; font-weight:700; padding:4px 12px; border-radius:100px;">Score {{ item.meta.score }}</span></td>
+                              {% endif %}
+                              {% if item.meta.deadline %}
+                              <td style="padding-right:8px;"><span style="display:inline-block; background-color:#FFF8E1; color:#C8850A; font-family:'Inter',sans-serif; font-size:11px; font-weight:700; padding:4px 12px; border-radius:100px;">Due {{ item.meta.deadline }}{% if item.meta.days_to_deadline is not none %} ({{ item.meta.days_to_deadline }}d){% endif %}</span></td>
+                              {% endif %}
+                            </tr>
+                          </table>
+
+                          {% if item.meta.funder or item.meta.source or item.meta.next_step %}
+                          <p style="margin:8px 0 0 0; font-family:'Inter','Helvetica Neue',sans-serif; font-size:12px; color:#9B9B9B; line-height:1.5;">
+                            {%- if item.meta.funder %}{{ item.meta.funder }}{% elif item.meta.source %}{{ item.meta.source }}{% endif -%}
+                            {%- if item.meta.next_step %} &middot; <span style="color:#555555;">Next: {{ item.meta.next_step }}</span>{% endif -%}
+                          </p>
+                          {% endif %}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+              {% endfor %}
+
+              {% endif %}
+              {% endfor %}
+
+              <tr><td style="padding-bottom:20px;"></td></tr>
+
+            </td>
+          </tr>
+
+          <!-- FOOTER -->
+          <tr>
+            <td style="background-color:#F0F0F2; padding: 24px 32px; border-radius: 0 0 12px 12px; border-left:1px solid #EBEBEB; border-right:1px solid #EBEBEB; border-bottom:1px solid #EBEBEB;" class="mobile-pad">
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                <tr>
+                  <td>
+                    <p style="margin:0; font-family:'Inter','Helvetica Neue',sans-serif; font-size:13px; color:#9B9B9B; line-height:1.6;">
+                      This brief was auto-generated by <span style="color:#C42A6E; font-weight:600;">SpotitEarly</span> &mdash; Science, Grant, and Regulatory agents, combined weekly.
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding-top:14px;">
+                    <a href="https://spotitearly.com" style="font-family:'Inter','Helvetica Neue',sans-serif; font-size:12px; color:#9B9B9B; text-decoration:underline;">spotitearly.com</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

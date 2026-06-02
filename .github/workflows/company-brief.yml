@@ -1,0 +1,124 @@
+name: Company Brief Email
+
+# Unified weekly SpotitEarly Company Brief — consolidates three tools into one
+# branded email (Science articles → Grant funding → Regulatory updates).
+#
+# Runs on EC2 (ai.spotitearly.com): the aggregator script sources Science
+# in-process from the publications DB and fetches Grant + Regulatory over the
+# loopback brief endpoints. Mirrors weekly-digest.yml's SSH pattern.
+
+on:
+  schedule:
+    # Mondays 12:00 UTC (~08:00 ET) — start-of-week briefing. Single weekly
+    # slot; change this one line to reschedule.
+    - cron: '0 12 * * 1'
+  workflow_dispatch:
+    inputs:
+      recipients:
+        description: 'Comma-separated recipient emails'
+        required: false
+        default: 'research@spotitearly.com,rom@spotitearly.com'
+        type: string
+      week_start:
+        description: 'ISO start date YYYY-MM-DD (default: trailing 7 days ending today)'
+        required: false
+        default: ''
+        type: string
+      week_end:
+        description: 'ISO end date YYYY-MM-DD (default: today)'
+        required: false
+        default: ''
+        type: string
+      science_top_n:
+        description: 'Max Science publications to include'
+        required: false
+        default: '5'
+        type: string
+      science_min_score:
+        description: 'Science minimum relevancy score'
+        required: false
+        default: '70'
+        type: string
+      grant_must_apply:
+        description: 'Grant must-apply combined-score floor'
+        required: false
+        default: '75'
+        type: string
+
+jobs:
+  send-company-brief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Generate and send the Company Brief on EC2
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ai.spotitearly.com
+          EC2_USER: ubuntu
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          BRIEF_TOKEN: ${{ secrets.BRIEF_TOKEN }}
+        run: |
+          # Write SSH key from hex-encoded secret
+          mkdir -p ~/.ssh
+          echo "$EC2_SSH_KEY" | xxd -r -p > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          RECIPIENTS="${{ inputs.recipients || 'research@spotitearly.com,rom@spotitearly.com' }}"
+          WEEK_START="${{ inputs.week_start || '' }}"
+          WEEK_END="${{ inputs.week_end || '' }}"
+          SCIENCE_TOP_N="${{ inputs.science_top_n || '5' }}"
+          SCIENCE_MIN_SCORE="${{ inputs.science_min_score || '70' }}"
+          GRANT_MUST_APPLY="${{ inputs.grant_must_apply || '75' }}"
+
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
+            set -e
+            cd /home/ubuntu/sie-ai/acitracker_v1
+            git pull --ff-only origin main
+            source .venv/bin/activate
+
+            export DATABASE_URL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
+            export GMAIL_ADDRESS="$GMAIL_ADDRESS"
+            export GMAIL_APP_PASSWORD="$GMAIL_APP_PASSWORD"
+            export BRIEF_TOKEN="$BRIEF_TOKEN"
+            # Per-tool brief feeds — reached over the EC2 loopback (host port
+            # mappings), NOT via nginx, to avoid path-prefix double-routing.
+            export GRANT_BRIEF_URL="http://127.0.0.1:8105/api/brief"
+            export REGULATORY_BRIEF_URL="http://127.0.0.1:8100/api/summaries/brief"
+            export PYTHONUTF8=1
+            export PYTHONIOENCODING=utf-8
+
+            WEEK_ARGS=""
+            if [ -n "$WEEK_START" ]; then WEEK_ARGS="--week-start $WEEK_START"; fi
+            if [ -n "$WEEK_END" ]; then WEEK_ARGS="\$WEEK_ARGS --week-end $WEEK_END"; fi
+
+            echo "Recipients: $RECIPIENTS"
+
+            python3 -u scripts/generate_company_brief.py \
+              \$WEEK_ARGS \
+              --send \
+              --gmail \
+              --to "$RECIPIENTS" \
+              --science-top-n "$SCIENCE_TOP_N" \
+              --science-min-score "$SCIENCE_MIN_SCORE" \
+              --grant-must-apply "$GRANT_MUST_APPLY" \
+              --verbose
+          REMOTE_SCRIPT
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "## Company Brief Sent" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Target:** EC2 (ai.spotitearly.com)" >> $GITHUB_STEP_SUMMARY
+          RECIPIENTS="${{ inputs.recipients || 'research@spotitearly.com,rom@spotitearly.com' }}"
+          echo "**Recipients:** $RECIPIENTS" >> $GITHUB_STEP_SUMMARY
+
+      - name: Failure notification
+        if: failure()
+        run: |
+          echo "## Company Brief Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the workflow logs for details." >> $GITHUB_STEP_SUMMARY

@@ -1,10 +1,10 @@
 name: Weekly Digest Email
 
 on:
-  schedule:
-    # Run every Thursday at 06:00 UTC (1:00am EST)
-    # Looks back 7 days from run time
-    - cron: '0 6 * * 4'
+  # NOTE: The scheduled Thursday send is DISABLED — Science articles now ship
+  # in the unified weekly Company Brief (.github/workflows/company-brief.yml).
+  # This workflow is kept for manual on-demand sends only. Re-add a
+  # `schedule:` block here to restore the standalone digest.
   workflow_dispatch:
     inputs:
       lookback_days:
