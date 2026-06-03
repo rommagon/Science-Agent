@@ -15,13 +15,14 @@ from datetime import date
 from typing import List, Optional
 
 from . import client
-from .contract import GRANT, REGULATORY, BriefSection, empty_section
+from .contract import BUSINESS, GRANT, REGULATORY, BriefSection, empty_section
 from .science_adapter import build_science_section
 
 logger = logging.getLogger(__name__)
 
 GRANT_SECTION_TITLE = "Grant Funding Opportunities"
 REGULATORY_SECTION_TITLE = "Regulatory Updates"
+BUSINESS_SECTION_TITLE = "Competitive & Industry Landscape"
 
 
 @dataclass
@@ -30,6 +31,7 @@ class BriefConfig:
 
     grant_brief_url: Optional[str] = None
     regulatory_brief_url: Optional[str] = None
+    bi_brief_url: Optional[str] = None
     brief_token: Optional[str] = None
     science_top_n: int = 5
     science_min_score: float = 70.0
@@ -43,6 +45,7 @@ class BriefConfig:
         cfg = cls(
             grant_brief_url=os.environ.get("GRANT_BRIEF_URL"),
             regulatory_brief_url=os.environ.get("REGULATORY_BRIEF_URL"),
+            bi_brief_url=os.environ.get("BI_BRIEF_URL"),
             brief_token=os.environ.get("BRIEF_TOKEN"),
             database_url=os.environ.get("DATABASE_URL"),
         )
@@ -92,13 +95,25 @@ def build_company_brief(
         timeout=cfg.http_timeout,
     )
 
-    sections = [science, grant, regulatory]
+    # 4. Business Intelligence (Competitor Tracker) — HTTP brief feed.
+    business = client.fetch_brief(
+        cfg.bi_brief_url,
+        cfg.brief_token,
+        tool_id=BUSINESS,
+        section_title=BUSINESS_SECTION_TITLE,
+        week_start=ws,
+        week_end=we,
+        timeout=cfg.http_timeout,
+    )
+
+    sections = [science, grant, regulatory, business]
     total = sum(len(s.get("items") or []) for s in sections)
     logger.info(
-        "company_brief assembled: science=%d grant=%d regulatory=%d (total=%d)",
+        "company_brief assembled: science=%d grant=%d regulatory=%d business=%d (total=%d)",
         len(science.get("items") or []),
         len(grant.get("items") or []),
         len(regulatory.get("items") or []),
+        len(business.get("items") or []),
         total,
     )
     return sections

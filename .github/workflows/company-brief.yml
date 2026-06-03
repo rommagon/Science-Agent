@@ -88,6 +88,7 @@ jobs:
             # mappings), NOT via nginx, to avoid path-prefix double-routing.
             export GRANT_BRIEF_URL="http://127.0.0.1:8105/api/brief"
             export REGULATORY_BRIEF_URL="http://127.0.0.1:8100/api/summaries/brief"
+            export BI_BRIEF_URL="http://127.0.0.1:8108/api/brief"
             export PYTHONUTF8=1
             export PYTHONIOENCODING=utf-8
 
