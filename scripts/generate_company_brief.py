@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Generate the weekly SpotitEarly Company Brief email.
 
-Consolidates three tools into one branded weekly email, in fixed order:
+Consolidates four tools into one branded weekly email, in fixed order:
     1. Science Agent articles  (this repo, in-process)
     2. Grant Agent funding      (HTTP: GRANT_BRIEF_URL)
     3. Regulatory updates       (HTTP: REGULATORY_BRIEF_URL)
+    4. Competitive landscape    (HTTP: BI_BRIEF_URL)
 
 Mirrors ``scripts/generate_weekly_digest.py``: same demo/send modes, same
 ``digest.senders`` Gmail path, same artifact-writing pattern.
@@ -175,6 +176,7 @@ def main() -> None:
     print(f"Mode:        {'send' if args.send else 'demo'}")
     print(f"Grant feed:  {cfg.grant_brief_url or '(unset)'}")
     print(f"Reg feed:    {cfg.regulatory_brief_url or '(unset)'}")
+    print(f"BI feed:     {cfg.bi_brief_url or '(unset)'}")
     print(f"Brief token: {'set' if cfg.brief_token else 'UNSET — HTTP feeds will be skipped'}")
     print("=" * 70 + "\n")
 

@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 SCIENCE = "science_agent"
 GRANT = "grant_agent"
 REGULATORY = "regulatory_tool"
+BUSINESS = "business_intelligence"
 
 # meta keys the template knows how to render as pills / sublines. Anything
 # else on item["meta"] is carried through but not displayed.
