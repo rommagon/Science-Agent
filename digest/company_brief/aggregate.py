@@ -60,7 +60,9 @@ def build_company_brief(
     week_end: date,
     cfg: BriefConfig,
 ) -> List[BriefSection]:
-    """Return the three sections in render order. Resilient per-source."""
+    """Return the four sections in render order — BI -> Science -> Grant ->
+    Regulatory (external market first, then our work, opportunities, obligations).
+    Resilient per-source: a failed feed degrades to an empty section."""
     ws, we = week_start.isoformat(), week_end.isoformat()
 
     # 1. Science — in-process (already internally try/excepted).
@@ -106,14 +108,15 @@ def build_company_brief(
         timeout=cfg.http_timeout,
     )
 
-    sections = [science, grant, regulatory, business]
+    # Render order (product decision): BI -> Science -> Grant -> Regulatory.
+    sections = [business, science, grant, regulatory]
     total = sum(len(s.get("items") or []) for s in sections)
     logger.info(
-        "company_brief assembled: science=%d grant=%d regulatory=%d business=%d (total=%d)",
+        "company_brief assembled: business=%d science=%d grant=%d regulatory=%d (total=%d)",
+        len(business.get("items") or []),
         len(science.get("items") or []),
         len(grant.get("items") or []),
         len(regulatory.get("items") or []),
-        len(business.get("items") or []),
         total,
     )
     return sections
