@@ -2,10 +2,10 @@
 """Generate the weekly SpotitEarly Company Brief email.
 
 Consolidates four tools into one branded weekly email, in fixed order:
-    1. Science Agent articles  (this repo, in-process)
-    2. Grant Agent funding      (HTTP: GRANT_BRIEF_URL)
-    3. Regulatory updates       (HTTP: REGULATORY_BRIEF_URL)
-    4. Competitive landscape    (HTTP: BI_BRIEF_URL)
+    1. Competitive landscape    (HTTP: BI_BRIEF_URL)
+    2. Science Agent articles  (this repo, in-process)
+    3. Grant Agent funding      (HTTP: GRANT_BRIEF_URL)
+    4. Regulatory updates       (HTTP: REGULATORY_BRIEF_URL)
 
 Mirrors ``scripts/generate_weekly_digest.py``: same demo/send modes, same
 ``digest.senders`` Gmail path, same artifact-writing pattern.
