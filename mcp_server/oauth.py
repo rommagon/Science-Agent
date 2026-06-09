@@ -35,6 +35,25 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 logger = logging.getLogger(__name__)
 
 
+# --- Config -------------------------------------------------------------------
+#
+# Environment flags (read at request time, alongside SCIENCE_MCP_TOKEN /
+# SCIENCE_MCP_PUBLIC_PREFIX below):
+#
+# MCP_ALLOW_DYNAMIC_REGISTRATION ("1"/"true"/"yes" to enable; default OFF):
+#   RFC 7591 dynamic client registration is an open token mint — anyone who
+#   can reach /register can mint a client_id and then walk the self-approvable
+#   consent flow. Keep it OFF in production. Flip it on temporarily only while
+#   (re)connecting a new MCP client (e.g. claude.ai re-registering after a
+#   server restart wipes the in-memory client store), then turn it back off.
+#   Already-issued tokens keep working while the flag is off.
+
+
+def _dynamic_registration_enabled() -> bool:
+    value = os.environ.get("MCP_ALLOW_DYNAMIC_REGISTRATION", "")
+    return value.strip().lower() in ("1", "true", "yes")
+
+
 # --- State ------------------------------------------------------------------
 
 
@@ -130,6 +149,58 @@ def store() -> OAuthStore:
     return _store
 
 
+# --- Rate limiting ------------------------------------------------------------
+
+# Simple in-memory sliding-window limiter for the OAuth surface. Dependency-free
+# and per-process (single uvicorn worker, same as the token store). Keyed by
+# (endpoint, client IP) so one noisy IP can't lock out the whole flow.
+
+RATE_LIMIT_MAX_REQUESTS = 10
+RATE_LIMIT_WINDOW_SECONDS = 60
+_RATE_BUCKETS_MAX_KEYS = 10_000
+
+_rate_buckets: dict[tuple[str, str], list[float]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP: first X-Forwarded-For hop, else remote addr."""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    client = request.client
+    return client.host if client else "unknown"
+
+
+def _rate_limited(request: Request, endpoint: str) -> Optional[JSONResponse]:
+    """Return a 429 response if this IP exceeded the window, else record the hit."""
+    now = time.time()
+
+    # Opportunistic pruning so the bucket map can't grow without bound.
+    if len(_rate_buckets) > _RATE_BUCKETS_MAX_KEYS:
+        for key in [
+            k for k, hits in _rate_buckets.items()
+            if not hits or now - hits[-1] >= RATE_LIMIT_WINDOW_SECONDS
+        ]:
+            _rate_buckets.pop(key, None)
+
+    key = (endpoint, _client_ip(request))
+    window = [t for t in _rate_buckets.get(key, []) if now - t < RATE_LIMIT_WINDOW_SECONDS]
+    if len(window) >= RATE_LIMIT_MAX_REQUESTS:
+        _rate_buckets[key] = window
+        logger.warning("oauth: rate limit exceeded for %s on %s", key[1], endpoint)
+        return JSONResponse(
+            {
+                "error": "rate_limited",
+                "error_description": "Too many requests; retry later.",
+            },
+            status_code=429,
+            headers={"Retry-After": str(RATE_LIMIT_WINDOW_SECONDS)},
+        )
+    window.append(now)
+    _rate_buckets[key] = window
+    return None
+
+
 # --- URL helpers ------------------------------------------------------------
 
 
@@ -203,6 +274,24 @@ async def authorization_server_metadata(request: Request) -> JSONResponse:
 
 
 async def register(request: Request) -> JSONResponse:
+    limited = _rate_limited(request, "register")
+    if limited:
+        return limited
+
+    if not _dynamic_registration_enabled():
+        logger.warning("oauth: dynamic registration attempt rejected (flag off)")
+        return JSONResponse(
+            {
+                "error": "access_denied",
+                "error_description": (
+                    "Dynamic client registration is disabled on this server. "
+                    "Set MCP_ALLOW_DYNAMIC_REGISTRATION=1 to allow new MCP "
+                    "clients to register."
+                ),
+            },
+            status_code=403,
+        )
+
     try:
         body = await request.json()
     except Exception:
@@ -272,6 +361,10 @@ SpotitEarly Science Agent corpus (publication search and lookup).</p>
 
 
 async def authorize(request: Request) -> Response:
+    limited = _rate_limited(request, "authorize")
+    if limited:
+        return limited
+
     q = request.query_params
     client_id = q.get("client_id", "")
     redirect_uri = q.get("redirect_uri", "")
@@ -329,6 +422,10 @@ def _redirect_with(uri: str, params: dict[str, str]) -> RedirectResponse:
 
 
 async def approve(request: Request) -> Response:
+    limited = _rate_limited(request, "approve")
+    if limited:
+        return limited
+
     form = await request.form()
     state_token = form.get("state_token", "")
     approved = form.get("approved", "")
@@ -354,6 +451,10 @@ async def approve(request: Request) -> Response:
 
 
 async def token(request: Request) -> JSONResponse:
+    limited = _rate_limited(request, "token")
+    if limited:
+        return limited
+
     form = await request.form()
     grant_type = form.get("grant_type", "")
 

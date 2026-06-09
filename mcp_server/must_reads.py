@@ -318,47 +318,25 @@ def _score_credibility_with_llm(must_reads: List[dict]) -> None:
                 mr["credibility_reason"] = ""
 
 
-def get_must_reads_from_db(
-    db_path: str = "data/db/acitrack.db",
-    since_days: int = 7,
-    limit: int = 10,
-    use_ai: bool = True,
-    rerank_max_candidates: int = 25,  # Reduced from 50 to ensure reliable parsing
-    run_id: Optional[str] = None,  # Optional run_id to use cached relevancy scores
-) -> dict:
-    """Retrieve must-reads from SQLite database with optional AI reranking.
+# Columns the candidate query reads (besides the PK). The Postgres path only
+# selects the subset that actually exists in the deployed schema.
+_CANDIDATE_COLUMNS = (
+    "title",
+    "published_date",
+    "source",
+    "venue",
+    "url",
+    "raw_text",
+    "summary",
+)
 
-    Args:
-        db_path: Path to SQLite database
-        since_days: Number of days to look back
-        limit: Maximum number of must-reads to return
-        use_ai: Whether to use AI reranking (default: True, requires OPENAI_API_KEY)
-        rerank_max_candidates: Max candidates to pass to AI reranker (default: 25)
-        run_id: Optional run identifier to load cached relevancy scores from Phase 2.5
 
-    Returns:
-        Dictionary with must_reads list and metadata
-    """
-    db_file = Path(db_path)
-    if not db_file.exists():
-        logger.warning("Database not found at %s, using fallback", db_path)
-        return _fallback_must_reads(since_days, limit, use_ai, rerank_max_candidates)
-
+def _fetch_candidates_sqlite(db_path: str, cutoff_date: str) -> List[dict]:
+    """Query the local SQLite database for must-read candidates."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
     try:
-        # Import rerank modules
-        from mcp_server.ai_reranker import rerank_with_openai, merge_rerank_results
-        from mcp_server.rerank_cache import get_cached_rerank, store_rerank_results, RERANK_VERSION
-
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-
-        # Calculate cutoff date
-        cutoff_date = (
-            datetime.now() - timedelta(days=since_days)
-        ).date().isoformat()
-
-        # Query publications from the last N days
         cursor.execute(
             """
             SELECT id, title, published_date, source, venue, url, raw_text, summary
@@ -368,8 +346,118 @@ def get_must_reads_from_db(
         """,
             (cutoff_date,),
         )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
 
+
+def _fetch_candidates_pg(cutoff_date: str) -> List[dict]:
+    """Query Postgres for must-read candidates.
+
+    Schema-tolerant: detects available columns and the PK column name via the
+    ``storage.pg_store`` helpers instead of hardcoding (the PK varies between
+    deployments — ``id`` / ``publication_id`` / ``pub_id``).
+    """
+    from storage.pg_store import (
+        _get_connection,
+        _get_publications_table_metadata,
+        _put_connection,
+    )
+    from storage.store import get_database_url
+
+    database_url = get_database_url()
+    conn = _get_connection(database_url)
+    try:
+        columns, pk_column, _, _ = _get_publications_table_metadata(conn, database_url)
+        if not pk_column:
+            raise RuntimeError("publications table missing recognizable PK column")
+        if "published_date" not in columns:
+            raise RuntimeError("publications table missing published_date column")
+
+        select_cols = [pk_column] + [c for c in _CANDIDATE_COLUMNS if c in columns]
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT {', '.join(select_cols)} FROM publications "
+            f"WHERE published_date >= %s ORDER BY published_date DESC",
+            (cutoff_date,),
+        )
         rows = cursor.fetchall()
+        cursor.close()
+    finally:
+        _put_connection(conn)
+
+    out: List[dict] = []
+    for row in rows:
+        d = dict(zip(select_cols, row))
+        if pk_column != "id":
+            d["id"] = d.pop(pk_column)
+        # Normalize date/datetime objects to ISO strings (the SQLite path
+        # stores ISO text, and downstream scoring expects strings).
+        pub_date = d.get("published_date")
+        if pub_date is not None and not isinstance(pub_date, str):
+            d["published_date"] = pub_date.isoformat()
+        # Fill columns absent from the deployed schema.
+        for col in _CANDIDATE_COLUMNS:
+            d.setdefault(col, None)
+        out.append(d)
+    return out
+
+
+def get_must_reads_from_db(
+    db_path: str = "data/db/acitrack.db",
+    since_days: int = 7,
+    limit: int = 10,
+    use_ai: bool = True,
+    rerank_max_candidates: int = 25,  # Reduced from 50 to ensure reliable parsing
+    run_id: Optional[str] = None,  # Optional run_id to use cached relevancy scores
+) -> dict:
+    """Retrieve must-reads from the database with optional AI reranking.
+
+    Backend detection mirrors ``mcp_server.tools`` / ``storage.store``: when
+    ``DATABASE_URL`` points at Postgres we query it directly; otherwise we use
+    the local SQLite file at ``db_path``. The ``data/raw`` JSON fallback
+    remains the last resort when neither database is reachable.
+
+    Args:
+        db_path: Path to SQLite database (ignored when Postgres is configured)
+        since_days: Number of days to look back
+        limit: Maximum number of must-reads to return
+        use_ai: Whether to use AI reranking (default: True, requires OPENAI_API_KEY)
+        rerank_max_candidates: Max candidates to pass to AI reranker (default: 25)
+        run_id: Optional run identifier to load cached relevancy scores from Phase 2.5
+
+    Returns:
+        Dictionary with must_reads list and metadata
+    """
+    try:
+        from storage.store import is_postgres
+
+        use_pg = is_postgres()
+    except ImportError:
+        use_pg = False
+
+    if not use_pg:
+        db_file = Path(db_path)
+        if not db_file.exists():
+            logger.warning("Database not found at %s, using fallback", db_path)
+            return _fallback_must_reads(since_days, limit, use_ai, rerank_max_candidates)
+
+    try:
+        # Import rerank modules
+        from mcp_server.ai_reranker import rerank_with_openai, merge_rerank_results
+        from mcp_server.rerank_cache import get_cached_rerank, store_rerank_results, RERANK_VERSION
+
+        # Calculate cutoff date
+        cutoff_date = (
+            datetime.now() - timedelta(days=since_days)
+        ).date().isoformat()
+
+        # Query publications from the last N days
+        if use_pg:
+            rows = _fetch_candidates_pg(cutoff_date)
+        else:
+            rows = _fetch_candidates_sqlite(db_path, cutoff_date)
+
         total_raw_pubs = len(rows)
 
         # Track filtering stats
@@ -492,10 +580,11 @@ def get_must_reads_from_db(
                 shortlist, validated_items = merge_rerank_results(shortlist, all_rerank_results)
 
                 # Store ONLY validated new results in cache
-                validated_new_items = [
-                    item for item in validated_items
-                    if item.get("pub_id") not in cached_results and item.get("pub_id") or item.get("id") not in cached_results
-                ]
+                validated_new_items = []
+                for item in validated_items:
+                    pid = item.get("pub_id") or item.get("id")
+                    if pid not in cached_results:
+                        validated_new_items.append(item)
                 if validated_new_items:
                     store_rerank_results(validated_new_items, model="gpt-4o-mini", rerank_version=RERANK_VERSION, db_path=db_path)
 
@@ -506,8 +595,6 @@ def get_must_reads_from_db(
 
         # STEP 3: Take top N results
         top_results = shortlist[:limit]
-
-        conn.close()
 
         # STEP 4: Format output with scoring blend
         must_reads_output = []

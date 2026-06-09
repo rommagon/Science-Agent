@@ -74,11 +74,38 @@ class TestAuth:
         r = client.get("/pending", headers=_auth("stranger@example.com"))
         assert r.status_code == 401  # not in allow-list → treated as unauthed
 
+    def test_empty_allow_list_denies(self, sqlite_db, pdf_dir):
+        # Fail closed: an empty ALLOWED_UPLOADER_EMAILS must deny everyone,
+        # even CF-authenticated users.
+        app = create_app({
+            "DATABASE_URL": None,
+            "SQLITE_PATH": sqlite_db,
+            "PDF_STORE_DIR": pdf_dir,
+            "ALLOWED_UPLOADER_EMAILS": [],
+            "TESTING": True,
+            "SECRET_KEY": "test",
+        })
+        r = app.test_client().get("/pending", headers=_auth())
+        assert r.status_code == 401
+
     def test_healthz_is_open(self, client):
         # Liveness must not require auth — CF Tunnel needs to probe it.
         r = client.get("/healthz")
         assert r.status_code == 200
         assert r.json == {"status": "ok"}
+
+
+class TestSecretKey:
+    def test_missing_secret_key_refuses_to_start(self, monkeypatch):
+        monkeypatch.delenv("UPLOAD_APP_SECRET_KEY", raising=False)
+        monkeypatch.delenv("ALLOW_INSECURE", raising=False)
+        with pytest.raises(RuntimeError, match="UPLOAD_APP_SECRET_KEY"):
+            create_app({"DATABASE_URL": None})
+
+    def test_missing_secret_key_allowed_in_dev_mode(self, monkeypatch):
+        monkeypatch.delenv("UPLOAD_APP_SECRET_KEY", raising=False)
+        app = create_app({"DATABASE_URL": None, "ALLOW_INSECURE": True})
+        assert app.config["SECRET_KEY"]  # random per-process secret was set
 
 
 class TestPendingList:

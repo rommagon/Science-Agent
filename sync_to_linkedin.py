@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import sys
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -31,6 +32,7 @@ MIN_RELEVANCY_SCORE = 80      # Only sync High tier publications
 LOOKBACK_DAYS = 30             # How far back to look for publications
 MAX_FACT_TEXT_CHARS = 1200     # Allow longer text to preserve useful quotes from abstracts
 SOURCE_NAME = "science_agent"  # Identifies synced facts in fact_bank
+REQUEST_TIMEOUT_SECONDS = 30   # Per-request timeout for Supabase calls
 
 # Domain-specific tag keywords to extract from titles/summaries
 TAG_KEYWORDS = {
@@ -205,6 +207,42 @@ def transform_to_facts(publications: List[Dict]) -> List[Dict]:
     return facts
 
 
+def _post_with_retry(endpoint: str, headers: Dict, payload, max_retries: int = 2, base_delay: float = 1.0):
+    """POST with timeout and exponential-backoff retry on connection errors/5xx.
+
+    Mirrors the backoff style of integrations/sheets.py:_retry_with_backoff.
+
+    Returns:
+        requests.Response on any non-5xx outcome, or None if every attempt
+        raised a connection error/timeout.
+    """
+    response = None
+    for attempt in range(max_retries + 1):
+        last_error = None
+        try:
+            response = requests.post(
+                endpoint, headers=headers, json=payload, timeout=REQUEST_TIMEOUT_SECONDS
+            )
+            if response.status_code < 500:
+                return response
+            last_error = f"HTTP {response.status_code}"
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            response = None
+            last_error = str(e)
+
+        if attempt >= max_retries:
+            break
+
+        delay = base_delay * (2 ** attempt)
+        logger.warning(
+            "Supabase upsert attempt %d/%d failed (%s), retrying in %.1fs",
+            attempt + 1, max_retries + 1, last_error, delay,
+        )
+        time.sleep(delay)
+
+    return response
+
+
 def upsert_to_supabase(facts: List[Dict], supabase_url: str, service_key: str) -> int:
     """Upsert facts into LinkedIn Manager's fact_bank via PostgREST."""
     if not facts:
@@ -220,8 +258,11 @@ def upsert_to_supabase(facts: List[Dict], supabase_url: str, service_key: str) -
     }
 
     # Batch upsert (PostgREST handles the unique constraint on source+source_id)
-    response = requests.post(endpoint, headers=headers, json=facts)
+    response = _post_with_retry(endpoint, headers, facts)
 
+    if response is None:
+        logger.error("Supabase upsert failed: no response after retries (connection error/timeout)")
+        return 0
     if response.status_code in (200, 201):
         logger.info(f"Successfully synced {len(facts)} facts to LinkedIn Manager fact_bank.")
         return len(facts)

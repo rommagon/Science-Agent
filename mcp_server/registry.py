@@ -118,8 +118,8 @@ TOOLS: list[Tool] = [
                 },
                 "rerank_max_candidates": {
                     "type": "integer",
-                    "description": "Maximum candidates passed to the AI reranker (default 50).",
-                    "default": 50,
+                    "description": "Maximum candidates passed to the AI reranker (default 25).",
+                    "default": 25,
                     "minimum": 10,
                     "maximum": 200,
                 },

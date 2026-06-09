@@ -235,3 +235,105 @@ def test_get_publication_returns_error_when_missing():
 def test_get_publication_requires_id():
     out = tools.get_publication_tool("")
     assert out["error"] == "publication_id is required"
+
+
+# --- get_must_reads_from_db: backend detection -------------------------------
+
+
+def _sample_candidate_rows():
+    from datetime import date
+
+    today = date.today().isoformat()
+    return [
+        {
+            "id": "p1",
+            "title": "ctDNA screening study",
+            "published_date": today,
+            "source": "Nature Cancer",
+            "venue": "Nature Cancer",
+            "url": "https://ex.org/1",
+            "raw_text": "biomarker methylation early detection",
+            "summary": "Liquid biopsy screening.",
+        },
+        {
+            "id": "p2",
+            "title": None,  # dropped by the missing-title filter
+            "published_date": today,
+            "source": "s",
+            "venue": "v",
+            "url": "https://ex.org/2",
+            "raw_text": "",
+            "summary": "",
+        },
+    ]
+
+
+def test_get_must_reads_uses_pg_fetcher_when_postgres_configured():
+    from mcp_server import must_reads
+
+    with patch("storage.store.is_postgres", return_value=True), \
+         patch.object(
+             must_reads, "_fetch_candidates_pg", return_value=_sample_candidate_rows()
+         ) as fetch_pg:
+        out = must_reads.get_must_reads_from_db(since_days=7, limit=5, use_ai=False)
+
+    assert fetch_pg.called
+    assert out["total_candidates"] == 1
+    item = out["must_reads"][0]
+    assert item["id"] == "p1"
+    # Same wire shape as the SQLite path.
+    assert {
+        "id", "title", "published_date", "source", "venue", "url",
+        "score_total", "score_components", "explanation", "why_it_matters",
+        "key_findings", "tags", "confidence",
+    } <= set(item.keys())
+
+
+def test_get_must_reads_pg_failure_falls_back():
+    from mcp_server import must_reads
+
+    with patch("storage.store.is_postgres", return_value=True), \
+         patch.object(
+             must_reads, "_fetch_candidates_pg", side_effect=RuntimeError("db down")
+         ):
+        out = must_reads.get_must_reads_from_db(since_days=7, limit=5, use_ai=False)
+
+    # Falls through to the JSON/raw fallback chain instead of raising.
+    assert "must_reads" in out
+    assert out["used_ai"] is False
+
+
+def test_fetch_candidates_pg_normalizes_pk_and_dates():
+    from datetime import date
+    from mcp_server import must_reads
+
+    class FakeCursor:
+        def execute(self, query, params):
+            self.query = query
+
+        def fetchall(self):
+            return [("abc", "T", date(2026, 6, 1), "src", "ven", "https://ex.org/1")]
+
+        def close(self):
+            pass
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+    meta = (
+        {"publication_id", "title", "published_date", "source", "venue", "url"},
+        "publication_id",
+        False,
+        False,
+    )
+    with patch("storage.pg_store._get_connection", return_value=FakeConn()), \
+         patch("storage.pg_store._put_connection", lambda conn: None), \
+         patch("storage.pg_store._get_publications_table_metadata", return_value=meta), \
+         patch("storage.store.get_database_url", return_value="postgresql://x"):
+        rows = must_reads._fetch_candidates_pg("2026-01-01")
+
+    assert rows[0]["id"] == "abc"  # publication_id normalized to id
+    assert rows[0]["published_date"] == "2026-06-01"  # date object → ISO string
+    assert rows[0]["raw_text"] is None  # missing schema columns filled
+    assert rows[0]["summary"] is None

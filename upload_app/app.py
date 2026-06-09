@@ -101,7 +101,15 @@ def _authed_email(app: Flask) -> Optional[str]:
         return None
 
     allow_list = app.config.get("ALLOWED_UPLOADER_EMAILS") or []
-    if allow_list and email.lower() not in [e.lower() for e in allow_list]:
+    if not allow_list:
+        # Fail closed: an empty allow-list must never mean "everyone".
+        logger.warning(
+            "Upload denied for %s: ALLOWED_UPLOADER_EMAILS is empty. Set the "
+            "ALLOWED_UPLOADER_EMAILS env var (comma-separated emails) to grant access.",
+            email,
+        )
+        return None
+    if email.lower() not in [e.lower() for e in allow_list]:
         logger.warning("Upload denied for %s (not in allow-list)", email)
         return None
     return email
@@ -129,7 +137,7 @@ def create_app(config: Optional[dict] = None) -> Flask:
     app.config.update(
         PDF_STORE_DIR=os.environ.get("PDF_STORE_DIR", DEFAULT_PDF_DIR),
         MAX_CONTENT_LENGTH=int(os.environ.get("MAX_UPLOAD_BYTES", DEFAULT_MAX_BYTES)),
-        SECRET_KEY=os.environ.get("UPLOAD_APP_SECRET_KEY", os.urandom(32)),
+        SECRET_KEY=os.environ.get("UPLOAD_APP_SECRET_KEY"),
         DATABASE_URL=os.environ.get("DATABASE_URL") or get_database_url(),
         SQLITE_PATH=os.environ.get("SQLITE_PATH"),
         ALLOW_INSECURE=os.environ.get("ALLOW_INSECURE") == "1",
@@ -140,6 +148,25 @@ def create_app(config: Optional[dict] = None) -> Flask:
     )
     if config:
         app.config.update(config)
+
+    # SECRET_KEY signs Flask session cookies (flash messages). A per-process
+    # random fallback breaks sessions intermittently when gunicorn runs more
+    # than one worker, so refuse to start without an explicit key outside dev
+    # mode (debug / ALLOW_INSECURE / TESTING).
+    if not app.config.get("SECRET_KEY"):
+        if app.debug or app.config.get("ALLOW_INSECURE") or app.config.get("TESTING"):
+            logger.warning(
+                "UPLOAD_APP_SECRET_KEY not set — using a per-process random "
+                "secret (dev mode only; sessions won't survive restarts)"
+            )
+            app.config["SECRET_KEY"] = os.urandom(32)
+        else:
+            raise RuntimeError(
+                "UPLOAD_APP_SECRET_KEY is not set. Flask sessions need a stable "
+                "secret shared across gunicorn workers — set the "
+                "UPLOAD_APP_SECRET_KEY environment variable (or run with "
+                "ALLOW_INSECURE=1 for local development)."
+            )
 
     def _open_db():
         return get_connection(

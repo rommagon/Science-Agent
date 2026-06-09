@@ -202,10 +202,10 @@ def _get_citation_features(item: Dict) -> Optional[Dict]:
         or None if bibliometrics system unavailable
     """
     try:
-        from bibliometrics.adapters import enrich_publication, BiblioMetrics
-        from bibliometrics.adapters import resolve_ids_to_identifiers
-    except ImportError:
-        logger.warning("bibliometrics module not available, skipping citation lookup")
+        from bibliometrics.adapters import STUB_IMPLEMENTATION as _biblio_is_stub
+        from bibliometrics.adapters import enrich_publication
+    except ImportError as e:
+        logger.error("bibliometrics module not available (%s), skipping citation lookup", e)
         return None
 
     pub_id = item.get("id", "")
@@ -258,7 +258,17 @@ def _get_citation_features(item: Dict) -> Optional[Dict]:
             max_related=0  # Don't fetch related papers
         )
 
-        if biblio_result:
+        # The current adapters are stubs that return zeroed metrics. Treat
+        # stub results — and all-zero results generally — as "no citation
+        # data" so the LLM rubric doesn't penalize them as genuine
+        # zero-citation papers.
+        has_real_data = (
+            biblio_result is not None
+            and not _biblio_is_stub
+            and bool(biblio_result.citation_count or biblio_result.citations_per_year)
+        )
+
+        if has_real_data:
             citation_features = {
                 "citation_count": biblio_result.citation_count,
                 "citations_per_year": biblio_result.citations_per_year,
@@ -270,7 +280,11 @@ def _get_citation_features(item: Dict) -> Optional[Dict]:
                        biblio_result.citation_count,
                        biblio_result.citations_per_year)
         else:
-            logger.info("No citation data available for pub_id=%s", pub_id)
+            logger.info(
+                "No citation data available for pub_id=%s%s",
+                pub_id,
+                " (bibliometrics enrichment is stubbed)" if _biblio_is_stub else "",
+            )
             citation_features = {
                 "citation_count": None,
                 "citations_per_year": None,

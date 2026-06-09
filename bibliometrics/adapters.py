@@ -10,6 +10,25 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# This module is a STUB: enrich_publication returns zeroed metrics and never
+# calls a real bibliometrics service. Consumers must treat its output as
+# "no citation data available", not as genuine zero-citation papers.
+STUB_IMPLEMENTATION = True
+
+_stub_notice_logged = False
+
+
+def _log_stub_notice_once() -> None:
+    """Log once per process that enrichment is stubbed and returns no real data."""
+    global _stub_notice_logged
+    if not _stub_notice_logged:
+        logger.warning(
+            "bibliometrics.adapters is a stub: citation enrichment returns "
+            "zeroed metrics, not real data (no OpenAlex/Semantic Scholar/"
+            "CrossRef calls are made)"
+        )
+        _stub_notice_logged = True
+
 
 @dataclass
 class BibliometricMetrics:
@@ -49,6 +68,7 @@ def enrich_publication(
     """
     # Stub implementation - returns empty metrics
     # In production, this would query OpenAlex, Semantic Scholar, etc.
+    _log_stub_notice_once()
     logger.debug("Bibliometric enrichment stub called (doi=%s, pmid=%s, title=%s)", doi, pmid, title)
 
     if not doi and not pmid and not title:
