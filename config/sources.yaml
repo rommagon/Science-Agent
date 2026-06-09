@@ -211,6 +211,34 @@ sources:
     query: '"Ann Oncol"[Journal]'
     retmax: 200
 
+  # --- Already trusted by the gating venue whitelist; high-signal additions ---
+  - name: JAMA Oncology
+    type: pubmed
+    query: '"JAMA Oncol"[Journal]'
+    retmax: 200
+
+  - name: Cancer Discovery
+    type: pubmed
+    query: '"Cancer Discov"[Journal]'
+    retmax: 200
+
+  - name: Science Translational Medicine
+    type: pubmed
+    query: '"Sci Transl Med"[Journal]'
+    retmax: 200
+
+  - name: International Journal of Cancer
+    type: pubmed
+    query: '"Int J Cancer"[Journal]'
+    retmax: 200
+
+  - name: Nature Communications
+    type: pubmed
+    # High volume (~40/day, mostly non-cancer) but whitelisted, so all are scored.
+    # First lever to trim if tri-model cost climbs.
+    query: '"Nat Commun"[Journal]'
+    retmax: 200
+
   # --- High-impact general & multidisciplinary ---
   # High volume; the tri-model 70+ filter gates relevance, so these are breadth
   # insurance against missing landmark detection/screening papers.

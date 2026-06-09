@@ -103,10 +103,22 @@ DEFAULT_VENUE_WHITELIST = [
     "jama oncology", "jama network open",
 
     # Screening/detection focused
-    "cancer epidemiology biomarkers prevention",
+    # NOTE: venue match is a plain lowercased substring test (no punctuation
+    # stripping), so list both the full name AND the NLM abbreviation, and keep
+    # punctuation out of the entry where the venue contains commas/ampersands.
+    "cancer epidemiology biomarkers prevention",  # legacy (won't match commas/&)
+    "cancer epidemiology, biomarkers & prevention",  # actual venue string
+    "cancer epidemiol biomarkers prev",  # NLM abbreviation
     "cancer prevention research",
     "international journal of cancer",
     "gut", "gastroenterology",
+
+    # Early detection / screening journals added Jun 2026
+    "journal of the national cancer institute", "jnci", "j natl cancer inst",
+    "ca - a cancer journal for clinicians", "ca cancer j clin",
+    "journal of breath research", "j breath res",
+    "sci transl med",  # Science Translational Medicine (NLM abbrev)
+    "nature communications", "nat commun",
 
     # Preprint servers (for cutting-edge research)
     "biorxiv", "medrxiv", "arxiv",
