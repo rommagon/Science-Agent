@@ -43,3 +43,10 @@ yarn-error.log*
 # local must-reads debug outputs
 data/output/must_reads_ai.json
 data/output/must_reads_heuristic.json
+
+# Local agent/swarm tooling runtime state (machine-local, not project code)
+.claude-flow/
+.claude/
+.hive-mind/
+.mcp.json
+CLAUDE.md

@@ -1752,6 +1752,7 @@ def get_all_embeddings_for_model(
             FROM publication_embeddings pe
             JOIN publications p ON pe.publication_id = p.publication_id
             WHERE pe.embedding_model = %s
+              AND pe.embedding_bytes IS NOT NULL
         """
         params = [embedding_model]
 
