@@ -34,99 +34,116 @@ sources:
     retmax: 200
 
   # --- Udi-requested journals ---
-  - name: Journal of the American Osteopathic Association
+  # NOTE: queries use the NLM Title Abbreviation with the [Journal] field tag.
+  # This performs a true journal-field search. Do NOT use the `journal:"Full Name"`
+  # form — PubMed silently rewrites it to an all-fields match, which either
+  # over-fetches unrelated articles or misses the journal entirely.
+  - name: Journal of Osteopathic Medicine
     type: pubmed
-    query: 'journal:"Journal of the American Osteopathic Association"'
+    # Formerly "Journal of the American Osteopathic Association" (ceased 2020)
+    query: '"J Osteopath Med"[Journal]'
     retmax: 200
 
   - name: PLoS One
     type: pubmed
-    query: 'journal:"PLoS One"'
+    query: '"PLoS One"[Journal]'
     retmax: 200
 
   - name: European Journal of Cardio-Thoracic Surgery
     type: pubmed
-    query: 'journal:"European Journal of Cardio-Thoracic Surgery"'
+    query: '"Eur J Cardiothorac Surg"[Journal]'
     retmax: 200
 
   - name: Israel Medical Association Journal
     type: pubmed
-    query: 'journal:"Israel Medical Association Journal"'
+    query: '"Isr Med Assoc J"[Journal]'
     retmax: 200
 
   - name: The Journal of Urology
     type: pubmed
-    query: 'journal:"The Journal of Urology"'
+    query: '"J Urol"[Journal]'
     retmax: 200
 
   - name: BMC Cancer
     type: pubmed
-    query: 'journal:"BMC Cancer"'
+    query: '"BMC Cancer"[Journal]'
     retmax: 200
 
-  - name: Interactive Cardiovascular and Thoracic Surgery
+  - name: Interdisciplinary CardioVascular and Thoracic Surgery
     type: pubmed
-    query: 'journal:"Interactive Cardiovascular and Thoracic Surgery"'
+    # Formerly "Interactive CardioVascular and Thoracic Surgery" (ceased 2022)
+    query: '"Interdiscip Cardiovasc Thorac Surg"[Journal]'
     retmax: 200
 
   - name: European Respiratory Journal
     type: pubmed
-    query: 'journal:"European Respiratory Journal"'
+    query: '"Eur Respir J"[Journal]'
     retmax: 200
 
   - name: European Urology
     type: pubmed
-    query: 'journal:"European Urology"'
+    query: '"Eur Urol"[Journal]'
     retmax: 200
 
   - name: Gut
     type: pubmed
-    query: 'journal:"Gut"'
+    query: '"Gut"[Journal]'
     retmax: 200
 
   - name: Journal of Veterinary Behavior
     type: pubmed
-    query: 'journal:"Journal of Veterinary Behavior"'
+    query: '"J Vet Behav"[Journal]'
     retmax: 200
 
   - name: Integrative Cancer Therapies
     type: pubmed
-    query: 'journal:"Integrative Cancer Therapies"'
+    query: '"Integr Cancer Ther"[Journal]'
     retmax: 200
 
   - name: British Medical Journal
     type: pubmed
-    query: 'journal:"British Medical Journal"'
+    query: '"BMJ"[Journal]'
     retmax: 200
 
   - name: Applied Animal Behaviour Science
     type: pubmed
-    query: 'journal:"Applied Animal Behaviour Science"'
+    query: '"Appl Anim Behav Sci"[Journal]'
     retmax: 200
 
   - name: The Lancet
     type: pubmed
-    query: 'journal:"The Lancet"'
+    query: '"Lancet"[Journal]'
+    retmax: 200
+
+  - name: Lancet Oncology
+    type: pubmed
+    query: '"Lancet Oncol"[Journal]'
     retmax: 200
 
   - name: Frontiers in Veterinary Science
     type: pubmed
-    query: 'journal:"Frontiers in Veterinary Science"'
+    query: '"Front Vet Sci"[Journal]'
     retmax: 200
 
   - name: Biology
     type: pubmed
-    query: 'journal:"Biology"'
+    # MDPI "Biology" — NLM title is "Biology (Basel)" to disambiguate
+    query: '"Biology (Basel)"[Journal]'
     retmax: 200
 
   - name: Acta Oncologica
     type: pubmed
-    query: 'journal:"Acta Oncologica"'
+    query: '"Acta Oncol"[Journal]'
     retmax: 200
 
   - name: BMC Urology
     type: pubmed
-    query: 'journal:"BMC Urology"'
+    query: '"BMC Urol"[Journal]'
+    retmax: 200
+
+  - name: JAMA
+    type: pubmed
+    query: '"JAMA"[Journal]'
     retmax: 200
 
   # Web scraping sources (not yet implemented)
