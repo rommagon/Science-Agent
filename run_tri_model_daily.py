@@ -17,18 +17,19 @@ This experimental runner does NOT affect the classic daily/weekly pipeline.
 """
 
 import argparse
+import concurrent.futures
+import hashlib
 import json
 import logging
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import yaml
 
 # Import classic pipeline components (exact same code path)
-from config.daily_config import compute_run_context
 from diff.dedupe import deduplicate_publications
 from ingest.fetch import fetch_publications
 from storage.store import get_store, get_database_url
@@ -43,16 +44,14 @@ from config.tri_model_config import (
     get_available_reviewers,
     validate_config,
     normalize_validation_result,
+    get_relevancy_rubric_version,
 )
-from config.tri_model_config import RELEVANCY_RUBRIC_VERSION
 from tri_model.prompts import get_prompt_hashes
 from tri_model.gating import (
     gate_publications,
     filter_for_evaluation,
     load_gating_config,
     get_gating_config_hashes,
-    GateResult,
-    GatingStats,
 )
 
 # Configure logging
@@ -122,37 +121,40 @@ def review_paper_with_tri_model(
         Dictionary with review results, or None if all reviewers failed
     """
     from tri_model.reviewers import claude_review, gemini_review
-    from tri_model.evaluator import gpt_evaluate
+    from tri_model.evaluator import gpt_evaluate, reviewer_fallback_evaluate
     from tri_model.credibility import score_paper_credibility
 
     claude_result = None
     gemini_result = None
 
-    # Call Claude reviewer if available
-    if "claude" in available_reviewers:
-        try:
-            claude_result = claude_review(paper)
-            if not claude_result.get("success"):
-                logger.warning(
-                    "Claude review failed for %s: %s",
-                    paper.get("id", "unknown")[:16],
-                    claude_result.get("error"),
-                )
-        except Exception as e:
-            logger.error("Claude reviewer exception for %s: %s", paper.get("id", "unknown")[:16], e)
+    # Call Claude and Gemini reviewers concurrently (they are independent)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        claude_future = executor.submit(claude_review, paper) if "claude" in available_reviewers else None
+        gemini_future = executor.submit(gemini_review, paper) if "gemini" in available_reviewers else None
 
-    # Call Gemini reviewer if available
-    if "gemini" in available_reviewers:
-        try:
-            gemini_result = gemini_review(paper)
-            if not gemini_result.get("success"):
-                logger.warning(
-                    "Gemini review failed for %s: %s",
-                    paper.get("id", "unknown")[:16],
-                    gemini_result.get("error"),
-                )
-        except Exception as e:
-            logger.error("Gemini reviewer exception for %s: %s", paper.get("id", "unknown")[:16], e)
+        if claude_future is not None:
+            try:
+                claude_result = claude_future.result()
+                if not claude_result.get("success"):
+                    logger.warning(
+                        "Claude review failed for %s: %s",
+                        paper.get("id", "unknown")[:16],
+                        claude_result.get("error"),
+                    )
+            except Exception as e:
+                logger.error("Claude reviewer exception for %s: %s", paper.get("id", "unknown")[:16], e)
+
+        if gemini_future is not None:
+            try:
+                gemini_result = gemini_future.result()
+                if not gemini_result.get("success"):
+                    logger.warning(
+                        "Gemini review failed for %s: %s",
+                        paper.get("id", "unknown")[:16],
+                        gemini_result.get("error"),
+                    )
+            except Exception as e:
+                logger.error("Gemini reviewer exception for %s: %s", paper.get("id", "unknown")[:16], e)
 
     # If both reviewers failed, skip this paper
     if (claude_result is None or not claude_result.get("success")) and \
@@ -161,6 +163,7 @@ def review_paper_with_tri_model(
         return None
 
     # Call GPT evaluator
+    gpt_result = None
     try:
         gpt_result = gpt_evaluate(paper, claude_result, gemini_result)
         if not gpt_result.get("success"):
@@ -169,10 +172,27 @@ def review_paper_with_tri_model(
                 paper.get("id", "unknown")[:16],
                 gpt_result.get("error"),
             )
-            return None
     except Exception as e:
         logger.error("GPT evaluator exception for %s: %s", paper.get("id", "unknown")[:16], e)
-        return None
+
+    # GPT is not a single point of failure: when it fails but at least one
+    # reviewer succeeded, fall back to a deterministic reviewer aggregate.
+    if gpt_result is None or not gpt_result.get("success"):
+        gpt_result = reviewer_fallback_evaluate(
+            paper,
+            claude_result,
+            gemini_result,
+            error=(gpt_result or {}).get("error"),
+        )
+        if not gpt_result.get("success"):
+            logger.warning(
+                "Evaluator fallback failed for %s, skipping", paper.get("id", "unknown")[:16]
+            )
+            return None
+        logger.warning(
+            "Using reviewer-fallback evaluation for %s (GPT evaluator unavailable)",
+            paper.get("id", "unknown")[:16],
+        )
 
     # Score credibility (using same LLM-based system as classic pipeline)
     credibility_result = None
@@ -318,7 +338,7 @@ def write_report(
             if paper.get("claude_score") is not None and paper.get("gemini_score") is not None:
                 f.write(f"**Individual Scores:** Claude: {paper['claude_score']}, Gemini: {paper['gemini_score']}\n\n")
 
-            f.write(f"**Agreement:** {paper['agreement_level']}\n\n")
+            f.write(f"**Agreement:** {paper['agreement_level'] or 'n/a (single reviewer)'}\n\n")
             f.write(f"**Summary:** {paper['final_summary']}\n\n")
             f.write(f"**Why Relevant:** {paper['final_relevancy_reason']}\n\n")
             f.write("---\n\n")
@@ -342,7 +362,7 @@ def write_manifest(
     window_mode: str,
     matched_daily_run_id: Optional[str] = None,
     prompt_version: str = "v2",
-    rubric_version: str = RELEVANCY_RUBRIC_VERSION,
+    rubric_version: Optional[str] = None,
     prompt_hash: Optional[str] = None,
     experiment_id: Optional[str] = None,
     gating_enabled: bool = False,
@@ -372,6 +392,10 @@ def write_manifest(
         gating_config_hashes: Hashes of venue/keyword lists
         gate_audit_rate: Audit rate used for gating
     """
+    if rubric_version is None:
+        # Re-derive at call time so the manifest records the rubric actually used
+        rubric_version = get_relevancy_rubric_version()
+
     manifest_data = {
         "run_id": run_id,
         "run_type": "tri-model-daily",
@@ -564,6 +588,10 @@ def main() -> None:
     args.gating_enabled = args.enable_gating and not args.disable_gating
     os.environ["TRI_MODEL_PROMPT_VERSION"] = args.prompt_version
 
+    # Re-derive the rubric version now that the prompt version env var is set,
+    # so manifests/events record the rubric actually used for this run.
+    rubric_version = get_relevancy_rubric_version()
+
     # Validate tri-model configuration
     if not is_tri_model_enabled():
         logger.error("Tri-model system is not enabled. Set TRI_MODEL_MINI_DAILY=true")
@@ -574,6 +602,11 @@ def main() -> None:
     # Validate configuration (with backwards-compatible normalization)
     raw_validation_result = validate_config()
     validation_result = normalize_validation_result(raw_validation_result)
+
+    # Surface non-fatal warnings (e.g. missing OpenAI key -> evaluator fallback)
+    for warning in validation_result.get("warnings", []):
+        logger.warning("Tri-model config warning: %s", warning)
+        print(f"\n⚠️  WARNING: {warning}")
 
     if not validation_result["valid"]:
         # Log validation errors (without exposing secrets)
@@ -740,11 +773,16 @@ def main() -> None:
         # Parse date if it's a string
         if isinstance(pub_date, str):
             try:
-                # Handle various ISO8601 formats
-                pub_date = datetime.fromisoformat(pub_date.replace("+00:00", "").replace("Z", ""))
+                # Handle various ISO8601 formats (with or without timezone)
+                pub_date = datetime.fromisoformat(pub_date.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
                 missing_date_count += 1
                 continue
+
+        # Normalize timezone-aware datetimes (any offset) to naive UTC so they
+        # compare safely against the naive window bounds.
+        if isinstance(pub_date, datetime) and pub_date.tzinfo is not None:
+            pub_date = pub_date.astimezone(timezone.utc).replace(tzinfo=None)
 
         # Apply window filter: window_start <= pub_date <= window_end
         if pub_date < window_start or pub_date > window_end:
@@ -976,7 +1014,8 @@ def main() -> None:
             venue_whitelist=venue_whitelist,
             keywords=keywords,
             audit_rate=args.gate_audit_rate,
-            audit_seed=hash(run_id) % (2**31),  # Deterministic seed from run_id
+            # Deterministic seed from run_id (str hash() is salted per process)
+            audit_seed=int(hashlib.sha256(run_id.encode("utf-8")).hexdigest(), 16) % (2**31),
         )
 
         gating_stats = gating_stats_obj.to_dict()
@@ -1008,7 +1047,10 @@ def main() -> None:
         print(f"  LOW bucket:             {gating_stats['low']}")
         print(f"  LOW audited:            {gating_stats['audited_low']} ({args.gate_audit_rate*100:.1f}% audit rate)")
         print(f"  To tri-model evaluate:  {len(papers_to_review)}")
-        print(f"  Evaluation reduction:   {100*(1 - len(papers_to_review)/len(all_papers)):.1f}%")
+        if all_papers:
+            print(f"  Evaluation reduction:   {100*(1 - len(papers_to_review)/len(all_papers)):.1f}%")
+        else:
+            print("  Evaluation reduction:   n/a (no usable papers)")
         print(f"{'='*70}\n")
     else:
         logger.info("Gating disabled, all %d papers will be tri-model evaluated", len(all_papers))
@@ -1075,7 +1117,7 @@ def main() -> None:
             "claude": args.prompt_version,
             "gemini": args.prompt_version,
             "gpt": args.prompt_version,
-            "rubric_version": RELEVANCY_RUBRIC_VERSION,
+            "rubric_version": rubric_version,
             "prompt_hash": prompt_hash,
             "prompt_hashes": prompt_hashes,
         }
@@ -1268,7 +1310,7 @@ def main() -> None:
         window_mode=window_mode,
         matched_daily_run_id=matched_daily_run_id,
         prompt_version=args.prompt_version,
-        rubric_version=RELEVANCY_RUBRIC_VERSION,
+        rubric_version=rubric_version,
         prompt_hash=prompt_hash,
         experiment_id=args.experiment_id,
         gating_enabled=args.gating_enabled,

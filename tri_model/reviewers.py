@@ -89,7 +89,7 @@ def claude_review(paper: Dict) -> Dict:
         {
             "success": bool,
             "review": dict or None,
-            "model": "claude-sonnet-4-5-20250929",
+            "model": "<Claude model id actually used, e.g. claude-haiku-4-5-20251001>",
             "version": "v1",
             "latency_ms": int,
             "error": str or None,
@@ -143,12 +143,15 @@ def claude_review(paper: Dict) -> Dict:
     parsed_review = None
     successful_model = None
     parse_errors = []
+    client = None
 
     for attempt in range(MAX_REVIEW_RETRIES):
         try:
-            from anthropic import Anthropic
+            # Construct the client once per call, not on every retry attempt
+            if client is None:
+                from anthropic import Anthropic
 
-            client = Anthropic(api_key=CLAUDE_API_KEY)
+                client = Anthropic(api_key=CLAUDE_API_KEY)
 
             logger.info("Calling Claude API (attempt %d/%d) for: %s", attempt + 1, MAX_REVIEW_RETRIES, title[:80])
 
@@ -371,6 +374,7 @@ def gemini_review(paper: Dict) -> Dict:
                     generation_config={
                         "temperature": 0.3,
                         "max_output_tokens": 1024,
+                        "response_mime_type": "application/json",
                     },
                     request_options={"timeout": REVIEW_TIMEOUT_SECONDS},
                 )
@@ -454,7 +458,7 @@ def gemini_review(paper: Dict) -> Dict:
             "reviewed_at": datetime.now().isoformat(),
         }
     else:
-        error_message = f"Failed to parse response after {MAX_REVIEW_RETRIES} attempts"
+        error_message = f"Failed to parse response after {GEMINI_MAX_RETRIES} attempts"
         if parse_errors:
             error_message = f"{error_message}: {parse_errors[-1]}"
         return {

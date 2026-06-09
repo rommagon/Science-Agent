@@ -84,6 +84,7 @@ GEMINI_API_KEY = sanitize_secret(os.getenv("GEMINI_API_KEY"))
 # Model names
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")  # Haiku 4.5 for cost savings
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GPT_EVALUATOR_MODEL = os.getenv("GPT_EVALUATOR_MODEL", "gpt-4o-mini")
 
 # Mini-daily parameters
 MINI_DAILY_WINDOW_HOURS = int(os.getenv("MINI_DAILY_WINDOW_HOURS", "6"))
@@ -98,6 +99,22 @@ if TRI_MODEL_PROMPT_VERSION == "v3":
     RELEVANCY_RUBRIC_VERSION = "relevancy_rubric_v3_2"
 else:
     RELEVANCY_RUBRIC_VERSION = "relevancy_rubric_v2"
+
+
+def get_relevancy_rubric_version() -> str:
+    """Get the relevancy rubric version for the active prompt version.
+
+    Reads TRI_MODEL_PROMPT_VERSION from the environment at call time so that
+    runners which set the env var after argument parsing (e.g.
+    run_tri_model_daily.py) record the rubric actually used, instead of the
+    value captured at module import time.
+
+    Returns:
+        Rubric version string (e.g. "relevancy_rubric_v3_2")
+    """
+    if os.getenv("TRI_MODEL_PROMPT_VERSION", TRI_MODEL_PROMPT_VERSION) == "v3":
+        return "relevancy_rubric_v3_2"
+    return "relevancy_rubric_v2"
 
 # Timeouts and retries
 REVIEW_TIMEOUT_SECONDS = 30
@@ -149,13 +166,14 @@ def normalize_validation_result(result) -> dict:
         result: Either a tuple (bool, str) or dict {"valid": bool, "errors": list, ...}
 
     Returns:
-        Normalized dict with keys: valid, errors, details
+        Normalized dict with keys: valid, errors, warnings, details
     """
     # If already a dict, return as-is (or normalize if missing keys)
     if isinstance(result, dict):
         return {
             "valid": result.get("valid", False),
             "errors": result.get("errors", []),
+            "warnings": result.get("warnings", []),
             "details": result.get("details"),
         }
 
@@ -163,16 +181,17 @@ def normalize_validation_result(result) -> dict:
     if isinstance(result, tuple):
         is_valid, error_message = result
         if is_valid:
-            return {"valid": True, "errors": [], "details": None}
+            return {"valid": True, "errors": [], "warnings": [], "details": None}
         else:
             return {
                 "valid": False,
                 "errors": [error_message] if error_message else [],
+                "warnings": [],
                 "details": error_message,
             }
 
     # Fallback for unexpected types
-    return {"valid": False, "errors": ["Invalid validation result type"], "details": None}
+    return {"valid": False, "errors": ["Invalid validation result type"], "warnings": [], "details": None}
 
 
 def validate_config() -> dict:
@@ -183,28 +202,36 @@ def validate_config() -> dict:
         {
             "valid": bool,
             "errors": list[str],  # Empty list if valid
+            "warnings": list[str],  # Non-fatal issues (e.g. evaluator fallback)
             "details": str or None  # Human-readable summary
         }
     """
     if not ENABLE_TRI_MODEL_MINI_DAILY:
-        return {"valid": True, "errors": [], "details": None}
+        return {"valid": True, "errors": [], "warnings": [], "details": None}
 
     reviewers = get_available_reviewers()
     errors = []
+    warnings = []
 
     if not reviewers:
         errors.append("No reviewer API keys configured (need CLAUDE_API_KEY or GEMINI_API_KEY)")
 
-    # Check that we have OpenAI key for evaluator
+    # The GPT evaluator is preferred but not fatal: when the OpenAI key is
+    # missing, the pipeline falls back to a deterministic reviewer aggregate
+    # (see tri_model.evaluator.reviewer_fallback_evaluate).
     openai_key = os.getenv("SPOTITEARLY_LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not openai_key:
-        errors.append("No OpenAI API key for GPT evaluator (need SPOTITEARLY_LLM_API_KEY or OPENAI_API_KEY)")
+        warnings.append(
+            "No OpenAI API key for GPT evaluator (need SPOTITEARLY_LLM_API_KEY or "
+            "OPENAI_API_KEY); deterministic reviewer-fallback aggregation will be used"
+        )
 
     if errors:
         return {
             "valid": False,
             "errors": errors,
+            "warnings": warnings,
             "details": f"{len(errors)} configuration error(s) found"
         }
 
-    return {"valid": True, "errors": [], "details": None}
+    return {"valid": True, "errors": [], "warnings": warnings, "details": None}

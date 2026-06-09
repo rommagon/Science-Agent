@@ -10,7 +10,12 @@ import time
 from typing import Dict, Optional, Any
 from datetime import datetime
 
-from config.tri_model_config import GPT_EVALUATOR_VERSION, REVIEW_TIMEOUT_SECONDS, MAX_REVIEW_RETRIES
+from config.tri_model_config import (
+    GPT_EVALUATOR_VERSION,
+    GPT_EVALUATOR_MODEL,
+    REVIEW_TIMEOUT_SECONDS,
+    MAX_REVIEW_RETRIES,
+)
 from tri_model.prompts import get_gpt_evaluator_prompt
 from tri_model.text_sanitize import sanitize_for_llm, sanitize_paper_for_review
 from tri_model.json_utils import extract_json_object
@@ -30,6 +35,40 @@ def _score_to_rating_0_3(score: int) -> int:
     if score >= 25:
         return 1
     return 0
+
+
+def _compute_agreement(
+    claude_review: Optional[Dict[str, Any]],
+    gemini_review: Optional[Dict[str, Any]],
+) -> tuple:
+    """Compute agreement level deterministically from reviewer scores.
+
+    Uses the thresholds documented in the evaluator prompts:
+    score gap <= 15 -> "high", <= 30 -> "moderate", > 30 -> "low".
+
+    Args:
+        claude_review: Claude's review dict (or None if unavailable)
+        gemini_review: Gemini's review dict (or None if unavailable)
+
+    Returns:
+        Tuple of (agreement_level, disagreements). agreement_level is None
+        when fewer than two reviewer scores are available.
+    """
+    claude_score = (claude_review or {}).get("relevancy_score")
+    gemini_score = (gemini_review or {}).get("relevancy_score")
+
+    if not isinstance(claude_score, int) or not isinstance(gemini_score, int):
+        return None, []
+
+    gap = abs(claude_score - gemini_score)
+    if gap <= 15:
+        return "high", []
+    if gap <= 30:
+        return "moderate", []
+    return "low", [
+        f"Reviewer relevancy scores diverge by {gap} points "
+        f"(Claude={claude_score}, Gemini={gemini_score})"
+    ]
 
 
 def _merge_review_signals(claude_review: Optional[Dict[str, Any]], gemini_review: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -182,8 +221,10 @@ def _parse_evaluator_json(response_text: str) -> Dict:
         data["final_signals"] = {}
     if "final_summary" not in data:
         data["final_summary"] = data.get("final_relevancy_reason", "")
+    # agreement_level/disagreements are computed deterministically from the
+    # reviewer scores in gpt_evaluate() (the GPT prompts forbid extra keys).
     if "agreement_level" not in data:
-        data["agreement_level"] = "moderate"
+        data["agreement_level"] = None
     if "disagreements" not in data:
         data["disagreements"] = []
     if "evaluator_rationale" not in data:
@@ -209,7 +250,7 @@ def gpt_evaluate(
         {
             "success": bool,
             "evaluation": dict or None,
-            "model": "gpt-4o-mini",
+            "model": "<GPT_EVALUATOR_MODEL, default gpt-4o-mini>",
             "version": "v1",
             "latency_ms": int,
             "error": str or None,
@@ -226,7 +267,7 @@ def gpt_evaluate(
         return {
             "success": False,
             "evaluation": None,
-            "model": "gpt-4o-mini",
+            "model": GPT_EVALUATOR_MODEL,
             "version": GPT_EVALUATOR_VERSION,
             "latency_ms": 0,
             "error": "OpenAI API key not configured",
@@ -248,7 +289,7 @@ def gpt_evaluate(
         return {
             "success": False,
             "evaluation": None,
-            "model": "gpt-4o-mini",
+            "model": GPT_EVALUATOR_MODEL,
             "version": GPT_EVALUATOR_VERSION,
             "latency_ms": 0,
             "error": "Missing title",
@@ -268,7 +309,7 @@ def gpt_evaluate(
         return {
             "success": False,
             "evaluation": None,
-            "model": "gpt-4o-mini",
+            "model": GPT_EVALUATOR_MODEL,
             "version": GPT_EVALUATOR_VERSION,
             "latency_ms": 0,
             "error": "No reviews available to evaluate (both Claude and Gemini failed)",
@@ -320,7 +361,7 @@ def gpt_evaluate(
             user_msg = sanitize_for_llm(prompt).encode("utf-8", "replace").decode("utf-8")
 
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=GPT_EVALUATOR_MODEL,
                 messages=[
                     {
                         "role": "system",
@@ -374,7 +415,7 @@ def gpt_evaluate(
                 return {
                     "success": False,
                     "evaluation": None,
-                    "model": "gpt-4o-mini",
+                    "model": GPT_EVALUATOR_MODEL,
                     "version": GPT_EVALUATOR_VERSION,
                     "latency_ms": latency_ms,
                     "error": f"API error after {MAX_REVIEW_RETRIES} attempts: {str(e)}",
@@ -394,10 +435,15 @@ def gpt_evaluate(
             claude_review=claude_review,
             gemini_review=gemini_review,
         )
+        # Compute agreement deterministically from reviewer scores (the GPT
+        # prompts forbid extra keys, so the model cannot report this itself).
+        agreement_level, disagreements = _compute_agreement(claude_review, gemini_review)
+        parsed_evaluation["agreement_level"] = agreement_level
+        parsed_evaluation["disagreements"] = disagreements
         return {
             "success": True,
             "evaluation": parsed_evaluation,
-            "model": "gpt-4o-mini",
+            "model": GPT_EVALUATOR_MODEL,
             "version": GPT_EVALUATOR_VERSION,
             "latency_ms": latency_ms,
             "error": None,
@@ -414,7 +460,7 @@ def gpt_evaluate(
         return {
             "success": False,
             "evaluation": None,
-            "model": "gpt-4o-mini",
+            "model": GPT_EVALUATOR_MODEL,
             "version": GPT_EVALUATOR_VERSION,
             "latency_ms": latency_ms,
             "error": error_message,
@@ -424,3 +470,100 @@ def gpt_evaluate(
                 "gemini_available": gemini_review is not None,
             }
         }
+
+
+_CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+
+
+def reviewer_fallback_evaluate(
+    paper: Dict,
+    claude_result: Optional[Dict],
+    gemini_result: Optional[Dict],
+    error: Optional[str] = None,
+) -> Dict:
+    """Build a deterministic evaluation from reviewer outputs when GPT fails.
+
+    Used so a GPT evaluator outage does not drop papers that at least one
+    reviewer scored successfully. The aggregate is fully deterministic:
+    - final_relevancy_score: mean of available reviewer relevancy scores
+    - confidence: minimum of available reviewer confidences (or "low")
+    - final_relevancy_rating_0_3: same thresholds as the evaluator/V3 rules
+
+    Args:
+        paper: Publication dict with title, source, raw_text/summary
+        claude_result: Result from claude_review() (may be None or success=False)
+        gemini_result: Result from gemini_review() (may be None or success=False)
+        error: Optional error message from the failed GPT evaluation
+
+    Returns:
+        Result dict with the same shape as gpt_evaluate(), with
+        model="reviewer-fallback" and evaluator_fallback=True for provenance.
+    """
+    claude_review = (claude_result or {}).get("review") if (claude_result or {}).get("success") else None
+    gemini_review = (gemini_result or {}).get("review") if (gemini_result or {}).get("success") else None
+
+    inputs_used = {
+        "claude_available": claude_review is not None,
+        "gemini_available": gemini_review is not None,
+    }
+
+    available_reviews = [r for r in (claude_review, gemini_review) if r]
+    if not available_reviews:
+        return {
+            "success": False,
+            "evaluation": None,
+            "model": "reviewer-fallback",
+            "version": GPT_EVALUATOR_VERSION,
+            "latency_ms": 0,
+            "error": "No reviews available for fallback aggregation (both Claude and Gemini failed)",
+            "evaluator_fallback": True,
+            "evaluated_at": datetime.now().isoformat(),
+            "inputs_used": inputs_used,
+        }
+
+    scores = [int(r.get("relevancy_score", 0)) for r in available_reviews]
+    final_score = int(round(sum(scores) / len(scores)))
+
+    confidences = [r.get("confidence") for r in available_reviews if r.get("confidence") in _CONFIDENCE_RANK]
+    confidence = min(confidences, key=lambda c: _CONFIDENCE_RANK[c]) if confidences else "low"
+
+    reviewer_reasons = []
+    if claude_review:
+        reviewer_reasons.append(f"Claude: {claude_review.get('relevancy_reason', '')}")
+    if gemini_review:
+        reviewer_reasons.append(f"Gemini: {gemini_review.get('relevancy_reason', '')}")
+
+    note = "GPT evaluator unavailable; score is the deterministic mean of reviewer scores."
+    final_reason = " ".join([note] + reviewer_reasons)
+
+    summaries = [r.get("summary") for r in available_reviews if r.get("summary")]
+    final_summary = summaries[0] if summaries else final_reason
+
+    agreement_level, disagreements = _compute_agreement(claude_review, gemini_review)
+
+    rationale = f"{note} Evaluator error: {error}" if error else note
+
+    evaluation = {
+        "final_relevancy_rating_0_3": _score_to_rating_0_3(final_score),
+        "final_relevancy_score": final_score,
+        "final_relevancy_reason": final_reason,
+        "final_signals": _merge_review_signals(claude_review, gemini_review),
+        "final_summary": final_summary,
+        "agreement_level": agreement_level,
+        "disagreements": disagreements,
+        "evaluator_rationale": rationale,
+        "confidence": confidence,
+        "evaluator_fallback": True,
+    }
+
+    return {
+        "success": True,
+        "evaluation": evaluation,
+        "model": "reviewer-fallback",
+        "version": GPT_EVALUATOR_VERSION,
+        "latency_ms": 0,
+        "error": None,
+        "evaluator_fallback": True,
+        "evaluated_at": datetime.now().isoformat(),
+        "inputs_used": inputs_used,
+    }
