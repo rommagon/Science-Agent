@@ -24,6 +24,10 @@ on:
         default: '70'
         type: string
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   send-reminder:
     runs-on: ubuntu-latest
@@ -39,17 +43,22 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           UPLOAD_BASE_URL: ${{ secrets.UPLOAD_BASE_URL }}
           UNPAYWALL_EMAIL: ${{ secrets.UNPAYWALL_EMAIL }}
+          # workflow_dispatch inputs — passed via env (never interpolated
+          # inline into the script) to prevent shell injection.
+          INPUT_ALERT_RECIPIENTS: ${{ inputs.alert_recipients }}
+          INPUT_TOP_N: ${{ inputs.top_n }}
+          INPUT_MIN_SCORE: ${{ inputs.min_score }}
         run: |
           mkdir -p ~/.ssh
           echo "$EC2_SSH_KEY" | xxd -r -p > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          RECIPIENTS="${{ inputs.alert_recipients || 'rom@spotitearly.com' }}"
-          TOP_N="${{ inputs.top_n || '5' }}"
-          MIN_SCORE="${{ inputs.min_score || '70' }}"
+          RECIPIENTS="${INPUT_ALERT_RECIPIENTS:-rom@spotitearly.com}"
+          TOP_N="${INPUT_TOP_N:-5}"
+          MIN_SCORE="${INPUT_MIN_SCORE:-70}"
 
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
             set -e
             cd /home/ubuntu/sie-ai/acitracker_v1
             git pull --ff-only origin main
@@ -91,3 +100,15 @@ jobs:
           echo "## Thursday Reminder Failed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Check the workflow logs. Digest will still send; uploads won't be reminded." >> $GITHUB_STEP_SUMMARY
+
+      - name: Open failure alert issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="[workflow-failure] PDF Upload Reminder (Thursday) failed on $(date -u +%F)"
+          BODY="Workflow run failed (label: workflow-failure): $RUN_URL"
+          gh issue create --title "$TITLE" --body "$BODY" --label workflow-failure \
+            || gh issue create --title "$TITLE" --body "$BODY"

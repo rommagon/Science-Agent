@@ -1,602 +1,98 @@
-# acitrack-v1
+# Science Agent
 
-A Python-based publication tracker for cancer research. Fetches, summarizes, and tracks changes in publications from multiple sources.
+Tracks, scores, and reports new cancer early-detection research for SpotitEarly.
+A daily **tri-model pipeline** (Claude + Gemini + GPT) fetches publications from
+journals and PubMed, gates them for relevance, scores relevancy and credibility,
+stores everything in Postgres, and feeds weekly email digests, the unified
+Company Brief, and an MCP connector for claude.ai / Custom GPTs.
 
-## Project Structure
+## Architecture
 
 ```
-acitrack-v1/
-├── run.py                      # Main CLI entrypoint
-├── config/sources.yaml         # Source configuration
-├── ingest/fetch.py            # Fetch publications from sources
-├── summarize/summarize.py     # Generate summaries
-├── diff/detect_changes.py     # Detect changes in publications
-├── output/report.py           # Generate reports
-├── data/                      # Data directory
-│   ├── raw/                   # Raw fetched data
-│   ├── summaries/             # Generated summaries
-│   └── snapshots/             # Publication snapshots
-├── acitrack_types.py          # Shared data types
-├── requirements.txt           # Python dependencies
-└── README.md                  # This file
+config/sources.yaml      Journal + PubMed source definitions
+ingest/                  Fetchers (RSS, PubMed E-utilities w/ NCBI_API_KEY)
+tri_model/               Gating, Claude + Gemini reviewers, GPT evaluator
+storage/                 store.py factory -> pg_store (Postgres) | sqlite_store (local dev)
+enrich/                  Canonical URL / DOI / PMID extraction, OA-PDF cascade
+digest/                  Digest data access, Jinja2 rendering, Gmail/SendGrid senders
+scripts/                 generate_weekly_digest.py, generate_company_brief.py,
+                         prepare_week_pdfs.py
+mcp_server/              MCP server (stdio + streamable HTTP) with must-reads tools
+upload_app/              Manual PDF upload web app (founder flow)
+run_tri_model_daily.py   Daily pipeline entrypoint
+run.py                   Legacy classic pipeline (local/reference use)
 ```
 
-## Installation
+Data flow: scrapers fetch -> dedupe -> store in `publications` -> tri-model
+review writes scores to `publications` (source of truth) and `tri_model_events`
+(audit) -> digest/brief/MCP read scored rows.
 
-1. Install dependencies:
+## Production (GitHub Actions -> SSH -> EC2)
+
+Production runs on an EC2 box (`ai.spotitearly.com`) with a local-only
+PostgreSQL database. Each workflow SSHes in, does `git pull --ff-only origin
+main`, activates the box's venv, and runs the relevant entrypoint. Required
+repo secrets include `EC2_SSH_KEY` (hex-encoded), the LLM keys
+(`CLAUDE_API_KEY`, `GEMINI_API_KEY`, `SPOTITEARLY_LLM_API_KEY`), `NCBI_API_KEY`,
+and Gmail credentials for the email sends.
+
+| Workflow | Schedule (UTC) | Purpose |
+|---|---|---|
+| `tri-model-daily.yml` | Daily 15:45 | Full tri-model pipeline + backend ingestion + LinkedIn sync |
+| `prepare-week-pdfs.yml` | Wed 18:00 | OA-PDF prefetch (Unpaywall -> Europe PMC -> Crossref -> bioRxiv) for the week's must-reads |
+| `pdf-reminder.yml` | Thu 03:00 | Reminder email if PDF uploads are still pending |
+| `company-brief.yml` | Thu 06:00 | Unified weekly Company Brief email (BI + Science + Grant + Regulatory) |
+| `weekly-digest.yml` | Manual only | Standalone Science digest (folded into the Company Brief) |
+| `db-backup.yml` | Daily 04:00 | `pg_dump` of the production DB, uploaded as a 30-day artifact |
+| `test.yml` | Push to main / PRs | pytest suite on Python 3.11 |
+
+Any failed run opens a GitHub issue titled `[workflow-failure] ...` in this
+repo, in addition to the step summary.
+
+## Email outputs
+
+- **Company Brief** (`scripts/generate_company_brief.py`) — weekly Thursday
+  email consolidating competitive, science, grant, and regulatory sections.
+  Science articles come from this repo's DB in-process; the other sections are
+  fetched from sibling services over the EC2 loopback.
+- **Weekly Digest** (`scripts/generate_weekly_digest.py`) — standalone science
+  digest with must-reads, scores, feedback links, and PDF attachments; now
+  manual-only.
+- **OA-PDF prep** (`scripts/prepare_week_pdfs.py`) — Wednesday job that fetches
+  open-access PDFs for the top must-reads and emails the founder upload links
+  for anything still missing (served by `upload_app/`).
+
+## MCP connector
+
+`mcp_server/` exposes `get_must_reads`, `search_publications`, and
+`get_publication` over stdio (Custom GPT) and streamable HTTP (claude.ai
+connector). See [mcp_server/README.md](mcp_server/README.md).
+
+## Local development
+
+Without `DATABASE_URL`, storage falls back to SQLite at `data/db/acitrack.db`.
+
 ```bash
 pip install -r requirements.txt
+
+# Small local tri-model run (requires LLM keys in the environment)
+export CLAUDE_API_KEY=... GEMINI_API_KEY=... SPOTITEARLY_LLM_API_KEY=...
+python run_tri_model_daily.py --max-papers 5 --lookback-hours 48 --enable-gating
+
+# Render a digest without sending
+python scripts/generate_weekly_digest.py --week last --demo
+
+# Tests
+python -m pytest tests/ -q
 ```
 
-## Usage
-
-Run the tracker with default settings (last 7 days):
-```bash
-python run.py
-```
-
-### Demo Mode
-
-Try the tracker quickly with a small dataset:
-```bash
-python run.py --reset-snapshot --since-days 7 --max-items-per-source 5
-```
-
-This resets the snapshot (marks all items as NEW), fetches the last 7 days, and limits output to 5 items per source for a quick test run.
-
-### Options
-
-#### Time Range
-- `--since-days N`: Fetch publications from the last N days (default: 7)
-- `--since-date YYYY-MM-DD`: Fetch publications since this specific date (overrides --since-days)
-
-#### Output Control
-- `--max-items-per-source N`: Maximum items to include per source in report/output (still ingests all items)
-- `--max-new-to-summarize N`: Maximum NEW items to summarize (default: 200). Most recent items by date are prioritized.
-- `--max-new-to-enrich N`: Maximum NEW items to enrich with commercial signals (default: 500). Most recent items by date are prioritized.
-
-#### Source Filtering
-- `--only-sources NAMES`: Comma-separated list of source names to include (run only these sources)
-- `--exclude-sources NAMES`: Comma-separated list of source names to exclude (skip these sources)
-
-#### Configuration
-- `--config PATH`: Path to sources configuration file (default: config/sources.yaml)
-- `--outdir PATH`: Output directory for data (default: data)
-- `--reset-snapshot`: Delete snapshot before running (all items will be marked as NEW)
-
-### Examples
-
-Fetch publications from the last 30 days:
-```bash
-python run.py --since-days 30
-```
-
-Use a custom configuration file:
-```bash
-python run.py --config my-sources.yaml
-```
-
-Limit summarization for cost control:
-```bash
-python run.py --max-new-to-summarize 50 --max-new-to-enrich 100
-```
-
-Run only specific sources:
-```bash
-python run.py --only-sources "Nature Cancer,PubMed - cancer (broad)"
-```
-
-## Configuration
-
-Edit `config/sources.yaml` to configure publication sources. Each source requires:
-- `name`: Human-readable source name
-- `type`: Source type (rss, pubmed)
-- Additional fields depend on type (url for RSS, query for PubMed)
-
-Example RSS source:
-```yaml
-sources:
-  - name: Nature Cancer
-    type: rss
-    url: https://www.nature.com/natcancer.rss
-```
-
-Example PubMed source:
-```yaml
-  - name: The Lancet
-    type: pubmed
-    query: 'journal:"The Lancet"'
-    retmax: 200
-```
-
-**Note on Historical Volumes:** Specific historical volumes or issues cited by leadership are treated as reference literature and are not ingested by the V1 "recent changes" engine. AciTrack V1 focuses exclusively on ongoing, forward-looking publication tracking.
-
-## Running Weekly
-
-### Automated Runs with GitHub Actions
-
-The repository includes a GitHub Actions workflow that runs acitrack automatically every Saturday at 00:00 UTC.
-
-#### Enabling the Weekly Schedule
-
-The workflow is defined in `.github/workflows/weekly_acitrack.yml` and will run automatically once pushed to your repository. The schedule can be modified by editing the cron expression in the workflow file.
-
-#### Manual Trigger
-
-You can manually trigger a run from the GitHub Actions tab:
-1. Go to the "Actions" tab in your repository
-2. Select "Weekly AciTrack Run" from the workflows list
-3. Click "Run workflow"
-4. Optionally configure:
-   - Number of days to look back (default: 7)
-   - Max items per source (default: 10)
-
-#### Setting Up Secrets (Optional)
-
-To enable AI-powered summaries in automated runs, add your OpenAI API key as a repository secret:
-
-1. Go to Settings > Secrets and variables > Actions
-2. Click "New repository secret"
-3. Name: `OPENAI_API_KEY`
-4. Value: Your OpenAI API key
-
-**Note:** The workflow will run successfully even without this secret, but will use stub summaries instead of real AI-generated ones.
-
-#### Accessing Results
-
-After each workflow run:
-- Go to the "Actions" tab and select the completed run
-- Download the artifacts containing:
-  - `*_report.md` - Full markdown report
-  - `*_new.csv` - CSV export of new publications
-  - `*_manifest.json` - Run provenance manifest
-  - `latest_*` - Latest pointer files
-
-#### Latest Pointers
-
-After every successful run (local or automated), the following "latest" pointer files are created:
-- `data/output/latest_report.md` - Copy of the most recent report
-- `data/output/latest_new.csv` - Copy of the most recent new publications CSV
-- `data/output/latest_manifest.json` - Copy of the most recent manifest
-
-These files make it easy to access the most recent results without knowing the specific run ID.
-
-## Google Drive Upload (Optional)
-
-You can automatically upload the latest output files to a Google Drive folder by using the `--upload-drive` flag.
-
-### Setup
-
-#### 1. Create a Google Cloud Service Account
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create or select a project
-3. Enable the Google Drive API:
-   - Navigate to "APIs & Services" > "Library"
-   - Search for "Google Drive API"
-   - Click "Enable"
-4. Create a service account:
-   - Navigate to "APIs & Services" > "Credentials"
-   - Click "Create Credentials" > "Service Account"
-   - Give it a name (e.g., "acitrack-uploader")
-   - Click "Create and Continue"
-   - Skip granting roles (click "Continue")
-   - Click "Done"
-5. Create and download a JSON key:
-   - Click on the newly created service account
-   - Go to the "Keys" tab
-   - Click "Add Key" > "Create new key"
-   - Choose "JSON" format
-   - Click "Create" - the key file will be downloaded
-
-#### 2. Share Your Google Drive Folder
-
-1. Create or navigate to the Google Drive folder where you want to upload files
-2. Get the folder ID from the URL:
-   - Example URL: `https://drive.google.com/drive/folders/1a2b3c4d5e6f7g8h9i0j`
-   - Folder ID: `1a2b3c4d5e6f7g8h9i0j`
-3. Share the folder with the service account:
-   - Click "Share" on the folder
-   - Add the service account email (found in your JSON key file, looks like `acitrack-uploader@your-project.iam.gserviceaccount.com`)
-   - Give it "Editor" permissions
-   - Click "Share"
-
-**For Shared Drives (Team Drives):**
-- The service account must be added as a member of the Shared Drive with "Content Manager" or "Manager" permissions
-
-#### 3. Set Environment Variables
-
-```bash
-# Path to your service account JSON key file
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your-service-account-key.json"
-
-# Google Drive folder ID where files will be uploaded
-export ACITRACK_DRIVE_FOLDER_ID="1a2b3c4d5e6f7g8h9i0j"
-```
-
-Add these to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to make them permanent.
-
-### Usage
-
-Run with the `--upload-drive` flag to upload the latest outputs to Google Drive:
-
-```bash
-python run.py --since-days 7 --max-items-per-source 5 --upload-drive
-```
-
-This will upload seven files to your configured Drive folder:
-- `latest_report.md` - Full markdown report
-- `latest_new.csv` - CSV export of new publications
-- `latest_manifest.json` - Run provenance manifest
-- `latest_must_reads.json` - Must-reads with AI rankings (structured data)
-- `latest_must_reads.md` - Must-reads in readable markdown format
-- `latest_summaries.json` - AI-generated summaries for must-reads
-- `latest_db.sqlite.gz` - Compressed database snapshot
-
-If files with the same names already exist in the folder, they will be updated (not duplicated).
-
-**Note:** Must-reads and summaries are generated during each run and uploaded automatically. If `OPENAI_API_KEY` is not set, must-reads will use heuristic-only ranking and summaries will fall back to available fields.
-
-### Verification
-
-When you run with `--upload-drive`, the service account email will be printed:
-
-```
-📧 Service account: acitrack-uploader@your-project.iam.gserviceaccount.com
-```
-
-This helps verify you're using the correct credentials. After upload, you'll see links to the files in Google Drive.
-
-### Troubleshooting
-
-**"GOOGLE_APPLICATION_CREDENTIALS environment variable not set"**
-- Make sure you've exported the environment variable in your current shell session
-
-**"ACITRACK_DRIVE_FOLDER_ID environment variable not set"**
-- Make sure you've exported the folder ID environment variable
-
-**"Permission denied" or "404 not found"**
-- Verify the service account email has been shared with the folder
-- For Shared Drives, ensure the service account is a member of the Shared Drive
-
-**"File not found" errors**
-- The latest pointer files must exist before upload. Run the pipeline at least once without `--upload-drive` first.
-
-## Export Tools
-
-The project includes standalone export tools for generating Drive artifacts locally:
-
-### Export Must-Reads
-
-Generate must-reads JSON and Markdown files:
-
-```bash
-# Export with AI reranking (requires OPENAI_API_KEY)
-python3 tools/export_must_reads.py --since-days 30 --limit 20
-
-# Export without AI (heuristic-only)
-python3 tools/export_must_reads.py --no-ai
-```
-
-Outputs:
-- `data/output/latest_must_reads.json` - Structured must-reads data
-- `data/output/latest_must_reads.md` - Human-readable markdown
-
-### Export Summaries
-
-Generate AI summaries for must-reads (requires must-reads JSON):
-
-```bash
-# Export summaries (requires OPENAI_API_KEY for LLM generation)
-python3 tools/export_summaries.py
-
-# Specify custom paths
-python3 tools/export_summaries.py --input custom_must_reads.json --output custom_summaries.json
-```
-
-Outputs:
-- `data/output/latest_summaries.json` - AI-generated summaries with caching
-
-**Summary caching:** Results are cached in SQLite (`must_reads_summary_cache` table) keyed by `(pub_id, summary_version)`. To regenerate summaries with a new prompt, increment `SUMMARY_VERSION` in `tools/export_summaries.py`.
-
-### Export Database Artifact
-
-Create a compressed database snapshot:
-
-```bash
-python3 tools/export_db_artifact.py
-```
-
-Outputs:
-- `data/output/latest_db.sqlite.gz` - Gzipped database (~70% compression)
-
-## Testing
-
-### Running Tests
-
-The project includes a minimal regression test suite using pytest:
-
-```bash
-pytest
-```
-
-Run with verbose output:
-```bash
-pytest -v
-```
-
-Run specific test file:
-```bash
-pytest tests/test_compute_id.py
-```
-
-### Test Coverage
-
-The test suite covers:
-- **ID Generation** (`test_compute_id.py`): Deterministic publication ID generation
-- **Change Detection** (`test_snapshot_diff.py`): First run all NEW, subsequent runs detect UNCHANGED
-- **Report Generation** (`test_report_generation.py`): Report file creation and count accuracy
-- **Commercial Signals** (`test_commercial.py`): Valid schema returned for all inputs including empty
-- **PubMed Date Parsing** (`test_pubmed_dates.py`): Handles YYYY, YYYY Mon, YYYY Mon DD, YYYY Mon-Mon, and seasonal dates (Winter, Spring, Summer, Fall)
-
-## Troubleshooting
-
-### urllib3 LibreSSL Warning
-
-If you see warnings about `urllib3 v2` and `LibreSSL` compatibility:
-
-```bash
-# Check your urllib3 version
-python -c "import urllib3; print(urllib3.__version__)"
-```
-
-The version should be `1.x`. If it shows `2.x`:
-
-1. Delete and recreate your virtual environment
-2. Reinstall dependencies: `pip install -r requirements.txt`
-
-The requirements.txt pins `urllib3<2` and `requests<2.32` to maintain compatibility with macOS LibreSSL.
-
-## Development Status
-
-This is V1 - a focused implementation with core functionality: ingestion, summarization, change detection, commercial enrichment, and reporting.
-
-## Development Workflow
-
-### Branching Strategy
-
-This repository uses a three-tier branching model:
-
-- **`main`** - Production branch
-  - Stable, autonomous, production-ready code
-  - Weekly GitHub Actions runs execute on this branch
-  - Snapshot state persists here via automated commits
-  - Google Drive uploads occur from this branch
-  - **Never break main** - all changes must be tested before merging
-
-- **`dev`** - Integration/staging branch
-  - Integration point for feature development
-  - All new work should branch from `dev`
-  - No scheduled workflows run on this branch
-  - Testing ground before promoting to `main`
-
-- **`feature/*`** - Short-lived feature branches
-  - Branch from `dev` for new features or fixes
-  - Merge back to `dev` when complete
-  - Delete after merging
-
-### Workflow
-
-1. **Starting new work:**
-   ```bash
-   git checkout dev
-   git pull origin dev
-   git checkout -b feature/your-feature-name
-   ```
-
-2. **Completing work:**
-   ```bash
-   # From your feature branch
-   git checkout dev
-   git pull origin dev
-   git merge feature/your-feature-name
-   git push origin dev
-   ```
-
-3. **Promoting to production:**
-   ```bash
-   # Only when dev is stable and tested
-   git checkout main
-   git pull origin main
-   git merge dev
-   git push origin main
-   ```
-
-### Important Notes
-
-- Scheduled GitHub Actions workflows only run on `main`
-- The snapshot file (`data/snapshots/latest.json`) is only persisted from `main`
-- Local testing can be done on any branch without affecting production state
-- Use `--reset-snapshot` for testing to avoid polluting the production snapshot
-
-### Snapshot Bootstrapping (One-Time Setup)
-
-If the snapshot file doesn't exist yet (e.g., new repo setup), you need to bootstrap it once:
-
-1. **Run locally to create the initial snapshot:**
-   ```bash
-   python run.py --since-days 7 --max-items-per-source 5
-   ```
-
-2. **Commit the snapshot to git:**
-   ```bash
-   git add data/snapshots/latest.json
-   git commit -m "chore: bootstrap snapshot state for change detection"
-   git push origin main
-   ```
-
-3. **Verify on next run:**
-   - Second GitHub Actions run should show non-zero "Unchanged" count
-   - Without this bootstrap, every run appears as "all new publications"
-
-**Why this matters:** The snapshot enables change detection across runs. Without it persisted in git, GitHub Actions starts fresh each time and can't detect which publications are truly new vs. previously seen.
-
-### Publication Database (V1)
-
-AciTrack automatically stores all fetched publications in a local SQLite database for future trend analysis and historical queries.
-
-**Database Location:** `data/db/acitrack.db`
-
-**Features:**
-- Automatic schema creation on first run
-- Idempotent inserts (duplicates are ignored)
-- Non-blocking storage - pipeline continues even if database fails
-- Stores publication metadata: title, authors, source, journal, dates, URLs
-
-**Schema (V1):**
-- `publications` table with indexed fields for efficient queries
-- Indexes on: `published_date`, `source`, `run_id`, `created_at`
-
-**Behavior:**
-- Database storage occurs automatically during each run (Phase 1.6)
-- Publications are stored after deduplication but before change detection
-- Storage failures are logged as warnings without stopping the pipeline
-- The database is additive-only and does not affect existing outputs
-
-**Future Use:**
-- This database enables trend analysis across multiple runs
-- Query historical publications by source, date range, or run
-- Track publication volume over time
-- Analyze source coverage and patterns
-
-**Note:** This feature is V1 and purely additive. All existing pipeline behavior (snapshots, reports, Drive uploads) remains unchanged.
-
-### Run History
-
-AciTrack automatically tracks detailed metadata for each pipeline run, enabling trend analysis across multiple executions.
-
-**Usage:**
-
-```bash
-# View last 10 runs (default)
-python -m tools.db_run_history
-
-# View last 20 runs
-python -m tools.db_run_history --limit 20
-```
-
-**Tracked Metadata:**
-- Run ID and timestamp
-- Since timestamp and time range
-- Source count and configuration
-- Total fetched (before/after dedup)
-- New vs unchanged publication counts
-- Summarization statistics
-- Drive upload status
-
-**Per-Run Publication Tracking:**
-- Every publication is linked to the run(s) that saw it
-- Status tracked (new/unchanged)
-- Enables queries like "which publications were new in run X?"
-
-**Output Example:**
-
-```
-==========================================================================================
-Run History (Last 10 Runs)
-==========================================================================================
-
-Run ID                    Started              New  Unchg  Total  Summ
-------------------------------------------------------------------------------------------
-20241228_135543_a66fd...  2024-12-28 13:55     15     67     82    15
-20241227_120432_b3c8e...  2024-12-27 12:04     23     59     82    23
-
-==========================================================================================
-
-New Publications Per Run:
-
-  20241228_135543  15  ███████████████
-  20241227_120432  23  ███████████████████████
-
-==========================================================================================
-```
-
-**Database Tables:**
-- `runs` - Run metadata (run_id, timestamps, counts, settings)
-- `pub_runs` - Per-run publication tracking (run_id, pub_id, status, source, date)
-
-**Schema Migration:**
-- Database schema automatically migrates from v1 to v2
-- Works on fresh databases and existing databases
-- Non-blocking: run history failures don't stop the pipeline
-
-**Note:** This feature is part of schema v2. The first run after upgrade will migrate the database automatically.
-
-### Must Reads (MCP + OpenAI Apps SDK)
-
-AciTrack includes a "Must Reads" feature that integrates with OpenAI Custom GPT via the Model Context Protocol (MCP). This provides an interactive UI for browsing and exploring the most important recent publications.
-
-**Key Features:**
-- Intelligent ranking based on source priority, recency, and keyword relevance
-- Interactive card-based UI with Open, Explain, and Refresh actions
-- Persistent save/bookmark functionality
-- Works with SQLite database or falls back to latest run outputs
-
-**Quick Start:**
-
-```bash
-# 1. Install MCP dependency
-python3 -m pip install mcp
-
-# 2. Build the UI widget (requires Node.js/npm)
-cd mcp_server/ui
-npm install
-npm run build
-
-# 3. Run the MCP server locally
-cd ../..
-python3 -m mcp_server.server
-
-# 4. Test the tool output
-python3 << 'EOF'
-from mcp_server.must_reads import get_must_reads_from_db
-import json
-result = get_must_reads_from_db(since_days=7, limit=10)
-print(json.dumps(result, indent=2))
-EOF
-
-# 5. Test the UI locally
-cd mcp_server/ui
-npm run dev
-# Visit http://localhost:5173
-```
-
-**Integration with Custom GPT:**
-
-To use Must Reads in ChatGPT, configure your Custom GPT with the MCP server:
-
-```json
-{
-  "mcp_servers": [
-    {
-      "name": "acitrack",
-      "command": "python3",
-      "args": ["-m", "mcp_server.server"],
-      "cwd": "/path/to/acitracker_v1"
-    }
-  ]
-}
-```
-
-Then use prompts like:
-- "Show me the must-read publications from the last week"
-- "What are the top cancer research papers from the last 30 days?"
-
-**Ranking Algorithm:**
-
-Publications are scored (0-600 points) based on:
-- **Source Priority (0-100):** Nature Cancer (100), Science (90), The Lancet (80), etc.
-- **Recency (0-200):** < 7 days (200), < 14 days (150), < 30 days (100)
-- **Keywords (0-300):** screening, biomarker, early detection, ctDNA, methylation, liquid biopsy, etc.
-
-**For detailed documentation, see:** [mcp_server/README.md](mcp_server/README.md)
+To target the production schema locally, set
+`DATABASE_URL=postgresql://...` and run Alembic migrations (`alembic upgrade
+head`).
+
+## Further documentation
+
+Point-in-time setup notes, implementation summaries, and historical fix logs
+live in [docs/](docs/). The scoring rubric is at
+[docs/RELEVANCY_RUBRIC_v2.md](docs/RELEVANCY_RUBRIC_v2.md) and the system
+overview at [docs/science-agent-overview.md](docs/science-agent-overview.md).

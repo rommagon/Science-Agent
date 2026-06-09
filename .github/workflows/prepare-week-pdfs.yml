@@ -28,6 +28,10 @@ on:
         default: 'false'
         type: string
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   prepare-pdfs:
     runs-on: ubuntu-latest
@@ -43,6 +47,12 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           UNPAYWALL_EMAIL: ${{ secrets.UNPAYWALL_EMAIL }}
           UPLOAD_BASE_URL: ${{ secrets.UPLOAD_BASE_URL }}
+          # workflow_dispatch inputs — passed via env (never interpolated
+          # inline into the script) to prevent shell injection.
+          INPUT_ALERT_RECIPIENTS: ${{ inputs.alert_recipients }}
+          INPUT_MIN_SCORE: ${{ inputs.min_score }}
+          INPUT_TOP_N: ${{ inputs.top_n }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           # Write SSH key from hex-encoded secret (matches weekly-digest.yml)
           mkdir -p ~/.ssh
@@ -50,17 +60,17 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          RECIPIENTS="${{ inputs.alert_recipients || 'rom@spotitearly.com' }}"
-          MIN_SCORE="${{ inputs.min_score || '70' }}"
-          TOP_N="${{ inputs.top_n || '5' }}"
-          DRY_RUN="${{ inputs.dry_run || 'false' }}"
+          RECIPIENTS="${INPUT_ALERT_RECIPIENTS:-rom@spotitearly.com}"
+          MIN_SCORE="${INPUT_MIN_SCORE:-70}"
+          TOP_N="${INPUT_TOP_N:-5}"
+          DRY_RUN="${INPUT_DRY_RUN:-false}"
 
           DRY_FLAG=""
           if [ "$DRY_RUN" = "true" ]; then
             DRY_FLAG="--dry-run"
           fi
 
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
             set -e
             cd /home/ubuntu/sie-ai/acitracker_v1
             git pull --ff-only origin main
@@ -91,12 +101,15 @@ jobs:
 
       - name: Summary
         if: success()
+        env:
+          INPUT_TOP_N: ${{ inputs.top_n }}
+          INPUT_MIN_SCORE: ${{ inputs.min_score }}
         run: |
           echo "## Wednesday PDF Prep Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Target:** EC2 (ai.spotitearly.com)" >> $GITHUB_STEP_SUMMARY
-          echo "**Top N:** ${{ inputs.top_n || '5' }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Min Score:** ${{ inputs.min_score || '70' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Top N:** ${INPUT_TOP_N:-5}" >> $GITHUB_STEP_SUMMARY
+          echo "**Min Score:** ${INPUT_MIN_SCORE:-70}" >> $GITHUB_STEP_SUMMARY
 
       - name: Failure notification
         if: failure()
@@ -104,3 +117,15 @@ jobs:
           echo "## Wednesday PDF Prep Failed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Check the workflow logs for details. Thursday digest will still send; attachments may be missing." >> $GITHUB_STEP_SUMMARY
+
+      - name: Open failure alert issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="[workflow-failure] Prepare Week PDFs (Wednesday) failed on $(date -u +%F)"
+          BODY="Workflow run failed (label: workflow-failure): $RUN_URL"
+          gh issue create --title "$TITLE" --body "$BODY" --label workflow-failure \
+            || gh issue create --title "$TITLE" --body "$BODY"

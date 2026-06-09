@@ -1,9 +1,15 @@
 pyyaml>=6.0
-requests>=2.31.0,<2.32  # Constrain to avoid urllib3 v2
+requests>=2.32.0  # >=2.32 fixes CVE-2024-35195 (verify=False session persistence)
 feedparser>=6.0.10
 openai>=1.0.0
+anthropic>=0.40.0  # Claude reviewer (tri_model/reviewers.py)
+google-generativeai>=0.8.0  # Gemini reviewer (tri_model/reviewers.py)
 python-dateutil>=2.8.0
-urllib3>=1.26.0,<2  # Pin for macOS LibreSSL compatibility
+# urllib3<2 was pinned for macOS LibreSSL compatibility (urllib3 v2 requires
+# OpenSSL 1.1.1+; macOS system Python links LibreSSL). Scope the pin to macOS
+# only so Linux (EC2 production, CI runners) gets urllib3 v2.
+urllib3>=1.26.0,<2; sys_platform == "darwin"  # Pin for macOS LibreSSL compatibility
+urllib3>=2; sys_platform != "darwin"
 pytest>=7.0.0
 google-api-python-client>=2.0.0
 google-auth>=2.0.0

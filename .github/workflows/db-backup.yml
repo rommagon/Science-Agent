@@ -1,0 +1,90 @@
+name: Database Backup
+
+# Daily logical backup of the production Postgres on the EC2 box
+# (ai.spotitearly.com). Dumps via pg_dump using the same local-Postgres
+# DATABASE_URL the daily pipeline exports (see tri-model-daily.yml), gzips
+# on the box, copies the dump back to the runner, and uploads it as a
+# 30-day workflow artifact.
+#
+# NOTE: First run needs manual verification — confirm pg_dump is installed
+# on the EC2 box and that the sie-ai role can dump the sie-ai database.
+
+on:
+  schedule:
+    # Daily at 04:00 UTC (well clear of the 15:45 UTC tri-model run)
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Dump Postgres on EC2 and fetch the backup
+        id: dump
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ai.spotitearly.com
+          EC2_USER: ubuntu
+        run: |
+          # Write SSH key from hex-encoded secret (matches tri-model-daily.yml)
+          mkdir -p ~/.ssh
+          echo "$EC2_SSH_KEY" | xxd -r -p > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          STAMP=$(date -u +%F)
+          echo "stamp=$STAMP" >> "$GITHUB_OUTPUT"
+
+          # Quoted heredoc: everything below runs verbatim on the EC2 box.
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$EC2_USER@$EC2_HOST" bash -s << 'REMOTE_SCRIPT'
+            set -e
+            set -o pipefail
+
+            # Same local-Postgres connection string the daily pipeline
+            # exports in tri-model-daily.yml (Postgres is local-only).
+            export DATABASE_URL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
+
+            pg_dump --no-owner --no-privileges "$DATABASE_URL" | gzip > /tmp/sie-ai-db-backup.sql.gz
+            ls -lh /tmp/sie-ai-db-backup.sql.gz
+          REMOTE_SCRIPT
+
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
+            "$EC2_USER@$EC2_HOST:/tmp/sie-ai-db-backup.sql.gz" \
+            "db-backup-$STAMP.sql.gz"
+
+          # Remove the remote temp copy
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$EC2_USER@$EC2_HOST" \
+            rm -f /tmp/sie-ai-db-backup.sql.gz
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ steps.dump.outputs.stamp }}
+          path: db-backup-${{ steps.dump.outputs.stamp }}.sql.gz
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Failure notification
+        if: failure()
+        run: |
+          echo "## Database Backup Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the workflow logs for details." >> $GITHUB_STEP_SUMMARY
+
+      - name: Open failure alert issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="[workflow-failure] Database Backup failed on $(date -u +%F)"
+          BODY="Workflow run failed (label: workflow-failure): $RUN_URL"
+          gh issue create --title "$TITLE" --body "$BODY" --label workflow-failure \
+            || gh issue create --title "$TITLE" --body "$BODY"

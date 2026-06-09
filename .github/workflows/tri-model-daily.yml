@@ -27,6 +27,10 @@ on:
         default: true
         type: boolean
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   tri-model-daily-run:
     runs-on: ubuntu-latest
@@ -47,6 +51,12 @@ jobs:
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
           LINKEDIN_MANAGER_SUPABASE_URL: ${{ secrets.LINKEDIN_MANAGER_SUPABASE_URL }}
           LINKEDIN_MANAGER_SUPABASE_SERVICE_KEY: ${{ secrets.LINKEDIN_MANAGER_SUPABASE_SERVICE_KEY }}
+          # workflow_dispatch inputs — passed via env (never interpolated
+          # inline into the script) to prevent shell injection.
+          INPUT_MAX_PAPERS: ${{ inputs.max_papers }}
+          INPUT_LOOKBACK_HOURS: ${{ inputs.lookback_hours }}
+          INPUT_PROMPT_VERSION: ${{ inputs.prompt_version }}
+          INPUT_INGEST: ${{ inputs.ingest }}
         run: |
           # Write SSH key from hex-encoded secret
           mkdir -p ~/.ssh
@@ -55,10 +65,10 @@ jobs:
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
           # Build the remote command
-          MAX_PAPERS="${{ inputs.max_papers }}"
-          LOOKBACK="${{ inputs.lookback_hours || '48' }}"
-          PROMPT_VERSION="${{ inputs.prompt_version || 'v3' }}"
-          INGEST="${{ inputs.ingest }}"
+          MAX_PAPERS="$INPUT_MAX_PAPERS"
+          LOOKBACK="${INPUT_LOOKBACK_HOURS:-48}"
+          PROMPT_VERSION="${INPUT_PROMPT_VERSION:-v3}"
+          INGEST="$INPUT_INGEST"
 
           CMD="python3 -u run_tri_model_daily.py"
           if [ -n "$MAX_PAPERS" ]; then
@@ -76,7 +86,7 @@ jobs:
           echo "Executing on EC2: $CMD"
 
           # SSH into EC2 and run the pipeline
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
             set -e
             cd /home/ubuntu/sie-ai/acitracker_v1
 
@@ -116,7 +126,7 @@ jobs:
           LINKEDIN_MANAGER_SUPABASE_URL: ${{ secrets.LINKEDIN_MANAGER_SUPABASE_URL }}
           LINKEDIN_MANAGER_SUPABASE_SERVICE_KEY: ${{ secrets.LINKEDIN_MANAGER_SUPABASE_SERVICE_KEY }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
             cd /home/ubuntu/sie-ai/acitracker_v1
             source .venv/bin/activate
             export DATABASE_URL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
@@ -139,3 +149,15 @@ jobs:
           echo "## Tri-Model Daily Run Failed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Check the workflow logs for details." >> $GITHUB_STEP_SUMMARY
+
+      - name: Open failure alert issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="[workflow-failure] Tri-Model Daily Run failed on $(date -u +%F)"
+          BODY="Workflow run failed (label: workflow-failure): $RUN_URL"
+          gh issue create --title "$TITLE" --body "$BODY" --label workflow-failure \
+            || gh issue create --title "$TITLE" --body "$BODY"

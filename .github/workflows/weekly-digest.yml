@@ -28,6 +28,10 @@ on:
         default: '5'
         type: string
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   send-weekly-digest:
     runs-on: ubuntu-latest
@@ -44,6 +48,12 @@ jobs:
           DIGEST_FEEDBACK_SECRET: ${{ secrets.DIGEST_FEEDBACK_SECRET }}
           DIGEST_FEEDBACK_BASE_URL: ${{ secrets.DIGEST_FEEDBACK_BASE_URL }}
           UPLOAD_BASE_URL: ${{ secrets.UPLOAD_BASE_URL }}
+          # workflow_dispatch inputs — passed via env (never interpolated
+          # inline into the script) to prevent shell injection.
+          INPUT_RECIPIENTS: ${{ inputs.recipients }}
+          INPUT_MIN_SCORE: ${{ inputs.min_score }}
+          INPUT_TOP_N: ${{ inputs.top_n }}
+          INPUT_LOOKBACK_DAYS: ${{ inputs.lookback_days }}
         run: |
           # Write SSH key from hex-encoded secret
           mkdir -p ~/.ssh
@@ -51,12 +61,12 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          RECIPIENTS="${{ inputs.recipients || 'research@spotitearly.com,rom@spotitearly.com' }}"
-          MIN_SCORE="${{ inputs.min_score || '70' }}"
-          TOP_N="${{ inputs.top_n || '5' }}"
-          LOOKBACK="${{ inputs.lookback_days || '7' }}"
+          RECIPIENTS="${INPUT_RECIPIENTS:-research@spotitearly.com,rom@spotitearly.com}"
+          MIN_SCORE="${INPUT_MIN_SCORE:-70}"
+          TOP_N="${INPUT_TOP_N:-5}"
+          LOOKBACK="${INPUT_LOOKBACK_DAYS:-7}"
 
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$EC2_USER@$EC2_HOST" bash -s << REMOTE_SCRIPT
             set -e
             cd /home/ubuntu/sie-ai/acitracker_v1
             git pull --ff-only origin main
@@ -92,11 +102,13 @@ jobs:
 
       - name: Summary
         if: success()
+        env:
+          INPUT_RECIPIENTS: ${{ inputs.recipients }}
         run: |
           echo "## Weekly Digest Sent" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Target:** EC2 (ai.spotitearly.com)" >> $GITHUB_STEP_SUMMARY
-          RECIPIENTS="${{ inputs.recipients || 'research@spotitearly.com,rom@spotitearly.com' }}"
+          RECIPIENTS="${INPUT_RECIPIENTS:-research@spotitearly.com,rom@spotitearly.com}"
           echo "**Recipients:** $RECIPIENTS" >> $GITHUB_STEP_SUMMARY
 
       - name: Failure notification
@@ -105,3 +117,15 @@ jobs:
           echo "## Weekly Digest Failed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Check the workflow logs for details." >> $GITHUB_STEP_SUMMARY
+
+      - name: Open failure alert issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="[workflow-failure] Weekly Digest Email failed on $(date -u +%F)"
+          BODY="Workflow run failed (label: workflow-failure): $RUN_URL"
+          gh issue create --title "$TITLE" --body "$BODY" --label workflow-failure \
+            || gh issue create --title "$TITLE" --body "$BODY"
