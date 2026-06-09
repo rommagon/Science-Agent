@@ -146,6 +146,104 @@ sources:
     query: '"JAMA"[Journal]'
     retmax: 200
 
+  # --- Early detection / screening / biomarkers ---
+  - name: Journal of Breath Research
+    type: pubmed
+    # Breath VOC analysis — directly relevant to canine scent / e-nose detection
+    query: '"J Breath Res"[Journal]'
+    retmax: 200
+
+  - name: Cancer Epidemiology, Biomarkers & Prevention
+    type: pubmed
+    query: '"Cancer Epidemiol Biomarkers Prev"[Journal]'
+    retmax: 200
+
+  - name: Journal of the National Cancer Institute
+    type: pubmed
+    query: '"J Natl Cancer Inst"[Journal]'
+    retmax: 200
+
+  - name: Cancer Prevention Research
+    type: pubmed
+    query: '"Cancer Prev Res (Phila)"[Journal]'
+    retmax: 200
+
+  - name: New England Journal of Medicine
+    type: pubmed
+    query: '"N Engl J Med"[Journal]'
+    retmax: 200
+
+  - name: Nature Medicine
+    type: pubmed
+    query: '"Nat Med"[Journal]'
+    retmax: 200
+
+  # --- Canine olfaction / detection dogs ---
+  - name: Animals (MDPI)
+    type: pubmed
+    # NLM title is "Animals (Basel)" to disambiguate
+    query: '"Animals (Basel)"[Journal]'
+    retmax: 200
+
+  - name: Animal Cognition
+    type: pubmed
+    query: '"Anim Cogn"[Journal]'
+    retmax: 200
+
+  - name: Chemical Senses
+    type: pubmed
+    query: '"Chem Senses"[Journal]'
+    retmax: 200
+
+  # --- Clinical oncology ---
+  - name: Journal of Clinical Oncology
+    type: pubmed
+    query: '"J Clin Oncol"[Journal]'
+    retmax: 200
+
+  - name: Clinical Cancer Research
+    type: pubmed
+    query: '"Clin Cancer Res"[Journal]'
+    retmax: 200
+
+  - name: Annals of Oncology
+    type: pubmed
+    query: '"Ann Oncol"[Journal]'
+    retmax: 200
+
+  # --- High-impact general & multidisciplinary ---
+  # High volume; the tri-model 70+ filter gates relevance, so these are breadth
+  # insurance against missing landmark detection/screening papers.
+  - name: Nature
+    type: pubmed
+    query: '"Nature"[Journal]'
+    retmax: 200
+
+  - name: Science
+    type: pubmed
+    query: '"Science"[Journal]'
+    retmax: 200
+
+  - name: Cell
+    type: pubmed
+    query: '"Cell"[Journal]'
+    retmax: 200
+
+  - name: Cancer Cell
+    type: pubmed
+    query: '"Cancer Cell"[Journal]'
+    retmax: 200
+
+  - name: Nature Reviews Cancer
+    type: pubmed
+    query: '"Nat Rev Cancer"[Journal]'
+    retmax: 200
+
+  - name: CA - A Cancer Journal for Clinicians
+    type: pubmed
+    query: '"CA Cancer J Clin"[Journal]'
+    retmax: 200
+
   # Web scraping sources (not yet implemented)
   # - name: SpotItEarly News
   #   type: web
