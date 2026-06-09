@@ -1,0 +1,49 @@
+[Unit]
+Description=Science Agent MCP server (streamable-HTTP for claude.ai connectors)
+After=network.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/sie-ai/acitracker_v1
+
+# All secrets live in this EnvironmentFile (owned root:ubuntu, chmod 640).
+# Required keys:
+#   SCIENCE_MCP_TOKEN=<openssl rand -hex 32>
+#   DATABASE_URL=postgresql://sie-ai:postgres@localhost:5432/sie-ai
+#   OPENAI_API_KEY=<sk-... — needed for query embedding in semantic search>
+EnvironmentFile=/etc/sie-ai/science-mcp.env
+
+# Bind loopback only — Cloudflare Tunnel is the only ingress path.
+ExecStart=/home/ubuntu/sie-ai/acitracker_v1/.venv/bin/uvicorn \
+    mcp_server.http_app:app \
+    --host 127.0.0.1 \
+    --port 5006 \
+    --workers 1 \
+    --proxy-headers \
+    --forwarded-allow-ips=127.0.0.1 \
+    --access-log
+
+Restart=on-failure
+RestartSec=5s
+
+# Hardening — this is internet-facing via CF Tunnel + bearer token.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=science-mcp
+
+[Install]
+WantedBy=multi-user.target

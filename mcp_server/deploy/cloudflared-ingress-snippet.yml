@@ -1,0 +1,24 @@
+# Cloudflare Tunnel ingress snippet for the Science Agent MCP HTTP server.
+#
+# Append the entry below to your existing /etc/cloudflared/config.yml ABOVE
+# the catch-all `service: http_status:404` rule. Then run:
+#
+#     cloudflared tunnel route dns <tunnel-name> science-mcp.spotitearly.com
+#     sudo systemctl restart cloudflared
+#
+# Auth model:
+#   - NO Cloudflare Access on this hostname. claude.ai cannot complete a CF
+#     Access OAuth handshake on its own.
+#   - Auth happens at the app layer via SCIENCE_MCP_TOKEN (Authorization:
+#     Bearer ...). See mcp_server/http_app.py:BearerAuthMiddleware.
+#   - /healthz is unauthenticated so cloudflared can probe it.
+
+# (Add this entry under `ingress:`.)
+- hostname: science-mcp.spotitearly.com
+  service: http://127.0.0.1:5006
+  originRequest:
+    noTLSVerify: false
+    connectTimeout: 10s
+    # Streamable-HTTP MCP holds responses open for streaming — keep generous.
+    noHappyEyeballs: false
+    keepAliveTimeout: 90s
