@@ -1,6 +1,7 @@
 """Fetch publications from configured sources."""
 
 import logging
+import os
 import re
 import time
 from datetime import datetime, timedelta
@@ -22,7 +23,22 @@ MAX_REDIRECTS = 5
 # PubMed E-utilities configuration
 PUBMED_ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 PUBMED_ESUMMARY_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
-PUBMED_POLITENESS_DELAY = 0.34  # seconds between API calls
+
+# NCBI credentials (read from env — never hardcode the key). With an API key NCBI
+# allows 10 requests/sec vs 3 without, which matters now that we query 40+ journals.
+NCBI_API_KEY = os.getenv("NCBI_API_KEY", "").strip()
+NCBI_TOOL = os.getenv("NCBI_TOOL", "acitracker").strip()
+NCBI_EMAIL = os.getenv("NCBI_EMAIL", "hello@spotitearly.com").strip()
+# Tighten the inter-call throttle when authenticated (10/s -> ~0.11s; else 3/s -> 0.34s).
+PUBMED_POLITENESS_DELAY = 0.11 if NCBI_API_KEY else 0.34  # seconds between API calls
+
+
+def _ncbi_auth_params() -> dict:
+    """Return NCBI E-utilities auth params (tool/email always; api_key if set)."""
+    params = {"tool": NCBI_TOOL, "email": NCBI_EMAIL}
+    if NCBI_API_KEY:
+        params["api_key"] = NCBI_API_KEY
+    return params
 
 
 def _strip_html_tags(text: str) -> str:
@@ -491,7 +507,8 @@ def _fetch_pubmed_source(
             "datetype": "pdat",
             "mindate": mindate,
             "maxdate": maxdate,
-            "retmode": "json"
+            "retmode": "json",
+            **_ncbi_auth_params(),
         }
 
         logger.info("Source '%s': searching PubMed from %s to %s", source_name, mindate, maxdate)
@@ -559,7 +576,8 @@ def _fetch_pubmed_source(
         esummary_params = {
             "db": "pubmed",
             "id": ",".join(pmids),
-            "retmode": "json"
+            "retmode": "json",
+            **_ncbi_auth_params(),
         }
 
         summary_result = None

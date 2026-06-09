@@ -44,6 +44,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SPOTITEARLY_LLM_API_KEY: ${{ secrets.SPOTITEARLY_LLM_API_KEY }}
           BACKEND_API_KEY: ${{ secrets.BACKEND_API_KEY }}
+          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
           LINKEDIN_MANAGER_SUPABASE_URL: ${{ secrets.LINKEDIN_MANAGER_SUPABASE_URL }}
           LINKEDIN_MANAGER_SUPABASE_SERVICE_KEY: ${{ secrets.LINKEDIN_MANAGER_SUPABASE_SERVICE_KEY }}
         run: |
@@ -93,6 +94,7 @@ jobs:
             export CLAUDE_MODEL="$CLAUDE_MODEL"
             export GEMINI_API_KEY="$GEMINI_API_KEY"
             export SPOTITEARLY_LLM_API_KEY="$SPOTITEARLY_LLM_API_KEY"
+            export NCBI_API_KEY="$NCBI_API_KEY"
             export TRI_MODEL_MINI_DAILY="true"
             export TRI_MODEL_PROMPT_VERSION="$PROMPT_VERSION"
             export PYTHONUTF8=1
