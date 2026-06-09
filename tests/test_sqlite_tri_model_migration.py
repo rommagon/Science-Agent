@@ -196,8 +196,91 @@ def test_idempotent_migration():
             os.unlink(db_path)
 
 
+def test_store_publications_upserts_url_fields():
+    """Existing rows get URL fields populated on conflict (PG-parity upsert)."""
+    from types import SimpleNamespace
+    from storage.sqlite_store import store_publications
+
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+        db_path = tmp.name
+
+    try:
+        pub = SimpleNamespace(
+            id="p1", title="T1", authors=["A"], source="src", venue=None,
+            date="2026-06-01", url="https://example.com/1", raw_text="x",
+            summary=None, source_names=[],
+        )
+        result = store_publications([pub], "run-1", db_path=db_path)
+        assert result["success"], result.get("error")
+        assert result["inserted"] == 1
+        assert result["duplicates"] == 0
+
+        # Same ID again with URL fields set: should update them, count as duplicate
+        pub_update = SimpleNamespace(
+            id="p1", title="IGNORED", authors=["A"], source="src", venue=None,
+            date="2026-06-01", url=None, raw_text="x", summary=None, source_names=[],
+            canonical_url="https://doi.org/10.1/abc", doi="10.1/abc",
+            pmid="12345", source_type="pubmed",
+        )
+        result = store_publications([pub_update], "run-2", db_path=db_path)
+        assert result["success"], result.get("error")
+        assert result["inserted"] == 0
+        assert result["duplicates"] == 1
+
+        conn = sqlite3.connect(db_path)
+        row = conn.execute(
+            "SELECT title, url, canonical_url, doi, pmid, source_type "
+            "FROM publications WHERE id = 'p1'"
+        ).fetchone()
+        conn.close()
+
+        # title untouched, url preserved (COALESCE with NULL), URL fields populated
+        assert row == (
+            "T1", "https://example.com/1", "https://doi.org/10.1/abc",
+            "10.1/abc", "12345", "pubmed",
+        ), row
+
+    finally:
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
+
+def test_get_connection_initializes_schema_once_per_path():
+    """_init_schema runs once per process per db path, not on every connect."""
+    import storage.sqlite_store as sqlite_store
+
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+        db_path = tmp.name
+
+    try:
+        calls = []
+        original = sqlite_store._init_schema
+
+        def counting_init(conn):
+            calls.append(1)
+            original(conn)
+
+        sqlite_store._init_schema = counting_init
+        try:
+            for _ in range(3):
+                conn = sqlite_store._get_connection(db_path)
+                conn.close()
+        finally:
+            sqlite_store._init_schema = original
+
+        assert len(calls) == 1, f"schema init should run once, ran {len(calls)} times"
+
+    finally:
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
+
 if __name__ == "__main__":
     print("Running tri-model migration tests...\n")
     test_tri_model_migration_from_old_schema()
     print()
     test_idempotent_migration()
+    print()
+    test_store_publications_upserts_url_fields()
+    print()
+    test_get_connection_initializes_schema_once_per_path()

@@ -287,10 +287,12 @@ def store_publications(
             "total": 0,
             "inserted": 0,
             "duplicates": 0,
+            "errors": 0,
             "error": None,
         }
 
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
         cursor = conn.cursor()
@@ -304,8 +306,14 @@ def store_publications(
             force_python_updated_at=force_python_updated_at,
         )
 
+        # RETURNING (xmax = 0) distinguishes a fresh insert (xmax = 0) from an
+        # ON CONFLICT DO UPDATE on an existing row (xmax != 0).  With ON
+        # CONFLICT DO NOTHING, conflicting rows return no row at all.
+        insert_sql_with_status = insert_sql + " RETURNING (xmax = 0) AS inserted"
+
         inserted = 0
         duplicates = 0
+        errors = 0
 
         for pub in publications:
             try:
@@ -319,12 +327,14 @@ def store_publications(
                 )
 
                 cursor.execute("SAVEPOINT pub_insert_sp")
-                cursor.execute(insert_sql, values)
+                cursor.execute(insert_sql_with_status, values)
+                row = cursor.fetchone()
                 cursor.execute("RELEASE SAVEPOINT pub_insert_sp")
 
-                if cursor.rowcount > 0:
+                if row is not None and row[0]:
                     inserted += 1
                 else:
+                    # Existing row updated (xmax != 0) or skipped (DO NOTHING)
                     duplicates += 1
 
             except Exception as e:
@@ -334,16 +344,17 @@ def store_publications(
                     cursor.execute("RELEASE SAVEPOINT pub_insert_sp")
                 except Exception:
                     conn.rollback()
-                duplicates += 1
+                errors += 1
                 continue
 
         conn.commit()
 
         logger.info(
-            "Stored publications to database: %d total, %d inserted, %d duplicates",
+            "Stored publications to database: %d total, %d inserted, %d duplicates, %d errors",
             len(publications),
             inserted,
             duplicates,
+            errors,
         )
 
         return {
@@ -351,6 +362,7 @@ def store_publications(
             "total": len(publications),
             "inserted": inserted,
             "duplicates": duplicates,
+            "errors": errors,
             "error": None,
         }
 
@@ -363,11 +375,13 @@ def store_publications(
             "total": len(publications) if publications else 0,
             "inserted": 0,
             "duplicates": 0,
+            "errors": 0,
             "error": str(e),
         }
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -412,6 +426,7 @@ def store_run_history(
         }
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
         cursor = conn.cursor()
@@ -492,8 +507,9 @@ def store_run_history(
             "pub_runs_inserted": 0,
         }
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -508,6 +524,7 @@ def get_run_history(limit: int = 10, database_url: str = None) -> list:
         List of run dictionaries, or empty list if query fails
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
         cursor = conn.cursor()
@@ -544,8 +561,9 @@ def get_run_history(limit: int = 10, database_url: str = None) -> list:
         logger.warning("Failed to get run history: %s", e)
         return []
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -589,6 +607,7 @@ def store_relevancy_scoring_event(
         Dictionary with storage result
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
         cursor = conn.cursor()
@@ -655,8 +674,9 @@ def store_relevancy_scoring_event(
             "error": str(e),
         }
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -674,6 +694,7 @@ def get_relevancy_scores_for_run(
         Dictionary mapping publication_id to score data
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
         cursor = conn.cursor()
@@ -709,8 +730,9 @@ def get_relevancy_scores_for_run(
         logger.warning("Failed to get relevancy scores for run %s: %s", run_id, e)
         return {}
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -730,6 +752,7 @@ def export_relevancy_events_to_jsonl(
         Dictionary with export statistics
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
         cursor = conn.cursor()
@@ -788,8 +811,9 @@ def export_relevancy_events_to_jsonl(
             "error": str(e),
         }
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -888,6 +912,7 @@ def store_tri_model_scoring_event(
         Dictionary with storage result
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
 
@@ -1002,8 +1027,9 @@ def store_tri_model_scoring_event(
             "error": str(e),
         }
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -1026,6 +1052,7 @@ def export_tri_model_events_to_jsonl(
         Dictionary with export statistics
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
 
@@ -1066,14 +1093,10 @@ def export_tri_model_events_to_jsonl(
         ]
 
         # Detect which columns exist in the publications table so we can
-        # LEFT JOIN for fallback values (url, published_date, etc.)
-        pub_columns = _get_available_columns(conn, "publications", True)
-        # Detect the PK column in publications for the JOIN condition
-        pub_pk = None
-        for candidate in ("publication_id", "id", "pub_id"):
-            if candidate in pub_columns:
-                pub_pk = candidate
-                break
+        # LEFT JOIN for fallback values (url, published_date, etc.).
+        # The shared metadata helper also gives us the PK column, keeping the
+        # probe order consistent across the module (id > publication_id > pub_id).
+        pub_columns, pub_pk, _, _ = _get_publications_table_metadata(conn, database_url)
 
         # Columns where we COALESCE from the publications table as fallback
         coalesce_map = {}  # event_col -> (pub_col, pub_col_exists)
@@ -1186,8 +1209,9 @@ def export_tri_model_events_to_jsonl(
             "error": str(e),
         }
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -1238,6 +1262,7 @@ def update_publication_scoring(
         Dictionary with update result
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
 
@@ -1328,8 +1353,9 @@ def update_publication_scoring(
             conn.rollback()
         return {"success": False, "updated": False, "error": str(e)}
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -1355,6 +1381,7 @@ def update_publication_canonical_url(
         Dictionary with update result
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
         cursor = conn.cursor()
@@ -1412,8 +1439,9 @@ def update_publication_canonical_url(
             "error": str(e),
         }
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -1433,19 +1461,24 @@ def get_publications_missing_canonical_url(
         List of publication dictionaries
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
-        cursor = conn.cursor()
 
-        query = """
-            SELECT publication_id, title, url, doi, pmid, source, source_type, published_date, raw_text
+        # Use dynamically-detected PK column instead of hardcoding
+        # "publication_id" (the table may use "id" or "pub_id" instead).
+        pk_col = _get_publications_table_metadata(conn, database_url)[1] or "publication_id"
+
+        cursor = conn.cursor()
+        query = f"""
+            SELECT {pk_col}, title, url, doi, pmid, source, source_type, published_date, raw_text
             FROM publications
             WHERE canonical_url IS NULL OR canonical_url = ''
         """
         params = []
 
         if since_days is not None:
-            query += " AND created_at >= NOW() - INTERVAL '%s days'"
+            query += " AND created_at >= NOW() - make_interval(days => %s)"
             params.append(since_days)
 
         query += " ORDER BY created_at DESC"
@@ -1476,8 +1509,9 @@ def get_publications_missing_canonical_url(
         logger.warning("Failed to get publications missing canonical URL: %s", e)
         return []
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -1495,15 +1529,20 @@ def get_publication_by_id(
         Publication dictionary or None
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
-        cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT publication_id, title, authors, source, venue, published_date, url, raw_text,
+        # Use dynamically-detected PK column instead of hardcoding
+        # "publication_id" (the table may use "id" or "pub_id" instead).
+        pk_col = _get_publications_table_metadata(conn, database_url)[1] or "publication_id"
+
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT {pk_col}, title, authors, source, venue, published_date, url, raw_text,
                    summary, doi, pmid, canonical_url, source_type
             FROM publications
-            WHERE publication_id = %s
+            WHERE {pk_col} = %s
         """, (publication_id,))
 
         row = cursor.fetchone()
@@ -1531,8 +1570,9 @@ def get_publication_by_id(
         logger.warning("Failed to get publication by ID: %s", e)
         return None
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -1558,6 +1598,7 @@ def store_publication_embedding(
         Dictionary with storage result
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
         cursor = conn.cursor()
@@ -1606,8 +1647,9 @@ def store_publication_embedding(
             "error": str(e),
         }
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -1627,12 +1669,13 @@ def get_publication_embedding(
         Dictionary with embedding data or None
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT embedding, embedding_dim, content_hash, created_at
+            SELECT embedding_bytes, embedding_dim, content_hash, created_at
             FROM publication_embeddings
             WHERE publication_id = %s AND embedding_model = %s
             ORDER BY created_at DESC
@@ -1655,8 +1698,9 @@ def get_publication_embedding(
         logger.warning("Failed to get embedding: %s", e)
         return None
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -1678,21 +1722,26 @@ def get_publications_missing_embeddings(
         List of publication dictionaries
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
-        cursor = conn.cursor()
 
-        query = """
-            SELECT p.publication_id, p.title, p.raw_text, p.summary, p.source, p.venue, p.published_date
+        # Use dynamically-detected PK column instead of hardcoding
+        # "publication_id" (the table may use "id" or "pub_id" instead).
+        pk_col = _get_publications_table_metadata(conn, database_url)[1] or "publication_id"
+
+        cursor = conn.cursor()
+        query = f"""
+            SELECT p.{pk_col}, p.title, p.raw_text, p.summary, p.source, p.venue, p.published_date
             FROM publications p
             LEFT JOIN publication_embeddings pe
-                ON p.publication_id = pe.publication_id AND pe.embedding_model = %s
+                ON p.{pk_col} = pe.publication_id AND pe.embedding_model = %s
             WHERE pe.publication_id IS NULL
         """
         params = [embedding_model]
 
         if since_days is not None:
-            query += " AND p.created_at >= NOW() - INTERVAL '%s days'"
+            query += " AND p.created_at >= NOW() - make_interval(days => %s)"
             params.append(since_days)
 
         query += " ORDER BY p.created_at DESC"
@@ -1721,8 +1770,9 @@ def get_publications_missing_embeddings(
         logger.warning("Failed to get publications missing embeddings: %s", e)
         return []
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -1742,22 +1792,27 @@ def get_all_embeddings_for_model(
         List of dictionaries with publication_id, embedding, and metadata
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
-        cursor = conn.cursor()
 
-        query = """
+        # Use dynamically-detected PK column instead of hardcoding
+        # "publication_id" (the table may use "id" or "pub_id" instead).
+        pk_col = _get_publications_table_metadata(conn, database_url)[1] or "publication_id"
+
+        cursor = conn.cursor()
+        query = f"""
             SELECT pe.publication_id, pe.embedding_bytes, pe.embedding_dim, pe.content_hash,
                    p.title, p.source, p.published_date, p.canonical_url
             FROM publication_embeddings pe
-            JOIN publications p ON pe.publication_id = p.publication_id
+            JOIN publications p ON pe.publication_id = p.{pk_col}
             WHERE pe.embedding_model = %s
               AND pe.embedding_bytes IS NOT NULL
         """
         params = [embedding_model]
 
         if since_days is not None:
-            query += " AND p.created_at >= NOW() - INTERVAL '%s days'"
+            query += " AND p.created_at >= NOW() - make_interval(days => %s)"
             params.append(since_days)
 
         query += " ORDER BY p.created_at DESC"
@@ -1783,8 +1838,9 @@ def get_all_embeddings_for_model(
         logger.warning("Failed to get embeddings for model: %s", e)
         return []
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)
 
 
@@ -1804,12 +1860,17 @@ def get_all_publications(
         List of publication dictionaries
     """
     conn = None
+    cursor = None
     try:
         conn = _get_connection(database_url)
-        cursor = conn.cursor()
 
-        query = """
-            SELECT publication_id, title, authors, source, venue, published_date, url, raw_text,
+        # Use dynamically-detected PK column instead of hardcoding
+        # "publication_id" (the table may use "id" or "pub_id" instead).
+        pk_col = _get_publications_table_metadata(conn, database_url)[1] or "publication_id"
+
+        cursor = conn.cursor()
+        query = f"""
+            SELECT {pk_col}, title, authors, source, venue, published_date, url, raw_text,
                    summary, doi, pmid, canonical_url, source_type, created_at
             FROM publications
             WHERE 1=1
@@ -1817,7 +1878,7 @@ def get_all_publications(
         params = []
 
         if since_days is not None:
-            query += " AND created_at >= NOW() - INTERVAL '%s days'"
+            query += " AND created_at >= NOW() - make_interval(days => %s)"
             params.append(since_days)
 
         query += " ORDER BY created_at DESC"
@@ -1853,6 +1914,7 @@ def get_all_publications(
         logger.warning("Failed to get all publications: %s", e)
         return []
     finally:
-        if conn:
+        if cursor:
             cursor.close()
+        if conn:
             _put_connection(conn)

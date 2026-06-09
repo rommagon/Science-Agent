@@ -23,6 +23,12 @@ DEFAULT_DB_PATH = "data/db/acitrack.db"
 # Schema version for future migrations
 SCHEMA_VERSION = 10  # Bumped for pdf_store + pending_fetch tables (OA PDF pipeline)
 
+# Database paths whose schema has already been initialized in this process.
+# Keyed by absolute path so fresh databases (e.g. test tmp_path files) still
+# get initialized, while repeated connections to the same file skip the
+# migration checks.
+_initialized_db_paths: set = set()
+
 
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Initialize the database schema.
@@ -743,8 +749,15 @@ def _get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     # Connect to database
     conn = sqlite3.connect(db_path)
 
-    # Initialize schema if needed
-    _init_schema(conn)
+    # Initialize schema once per process per database path
+    resolved_path = str(db_file.resolve())
+    if resolved_path not in _initialized_db_paths:
+        try:
+            _init_schema(conn)
+        except Exception:
+            conn.close()
+            raise
+        _initialized_db_paths.add(resolved_path)
 
     return conn
 
@@ -785,9 +798,43 @@ def store_publications(
             "error": None,
         }
 
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
+
+        # Schema-tolerant column detection (mirrors pg_store's dynamic
+        # insert): URL-related columns were added in later migrations, so
+        # only include the ones that exist in this database.
+        cursor.execute("PRAGMA table_info(publications)")
+        table_columns = {row[1] for row in cursor.fetchall()}
+
+        base_columns = [
+            "id", "title", "authors", "source", "venue", "published_date",
+            "url", "raw_text", "summary", "run_id", "source_names",
+        ]
+        optional_columns = [
+            c for c in ("canonical_url", "doi", "pmid", "source_type")
+            if c in table_columns
+        ]
+        insert_columns = base_columns + optional_columns
+
+        # On conflict, update URL-related fields so existing publications get
+        # their links populated (same semantics as pg_store).  COALESCE keeps
+        # us from overwriting a good value with NULL.
+        upsert_fields = [
+            c for c in ("url", "canonical_url", "doi", "pmid", "source_type")
+            if c in insert_columns
+        ]
+        update_set = ", ".join(
+            f"{c} = COALESCE(excluded.{c}, {c})" for c in upsert_fields
+        )
+        placeholders = ", ".join("?" for _ in insert_columns)
+        insert_sql = (
+            f"INSERT INTO publications ({', '.join(insert_columns)}) "
+            f"VALUES ({placeholders}) "
+            f"ON CONFLICT(id) DO UPDATE SET {update_set}"
+        )
 
         inserted = 0
         duplicates = 0
@@ -797,29 +844,35 @@ def store_publications(
                 authors_str = ", ".join(pub.authors) if pub.authors else ""
                 source_names_str = ", ".join(pub.source_names) if getattr(pub, "source_names", None) else ""
 
-                cursor.execute("""
-                    INSERT OR IGNORE INTO publications (
-                        id, title, authors, source, venue, published_date,
-                        url, raw_text, summary, run_id, source_names
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    pub.id,
-                    pub.title,
-                    authors_str,
-                    pub.source,
-                    getattr(pub, "venue", None),
-                    getattr(pub, "date", None),
-                    getattr(pub, "url", None),
-                    getattr(pub, "raw_text", None),
-                    getattr(pub, "summary", None),
-                    run_id,
-                    source_names_str,
-                ))
+                values_map = {
+                    "id": pub.id,
+                    "title": pub.title,
+                    "authors": authors_str,
+                    "source": pub.source,
+                    "venue": getattr(pub, "venue", None),
+                    "published_date": getattr(pub, "date", None),
+                    "url": getattr(pub, "url", None),
+                    "raw_text": getattr(pub, "raw_text", None),
+                    "summary": getattr(pub, "summary", None),
+                    "run_id": run_id,
+                    "source_names": source_names_str,
+                    "canonical_url": getattr(pub, "canonical_url", None),
+                    "doi": getattr(pub, "doi", None),
+                    "pmid": getattr(pub, "pmid", None),
+                    "source_type": getattr(pub, "source_type", None),
+                }
 
-                if cursor.rowcount > 0:
-                    inserted += 1
-                else:
+                # Upserts always report rowcount 1, so check existence first
+                # to keep inserted/duplicates counts accurate.
+                cursor.execute("SELECT 1 FROM publications WHERE id = ?", (pub.id,))
+                exists = cursor.fetchone() is not None
+
+                cursor.execute(insert_sql, [values_map.get(c) for c in insert_columns])
+
+                if exists:
                     duplicates += 1
+                else:
+                    inserted += 1
 
             except sqlite3.Error as e:
                 logger.warning("Failed to insert publication %s: %s", getattr(pub, "id", "UNKNOWN"), e)
@@ -827,7 +880,6 @@ def store_publications(
                 continue
 
         conn.commit()
-        conn.close()
 
         logger.info(
             "Stored publications to database: %d total, %d inserted, %d duplicates",
@@ -853,6 +905,9 @@ def store_publications(
             "duplicates": 0,
             "error": str(e),
         }
+    finally:
+        if conn:
+            conn.close()
 
 
 def store_run_history(
@@ -892,6 +947,7 @@ def store_run_history(
             "error": str or None
         }
     """
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -917,7 +973,6 @@ def store_run_history(
         ))
 
         conn.commit()
-        conn.close()
 
         logger.info("Stored run history for run_id=%s", run_id)
 
@@ -932,6 +987,9 @@ def store_run_history(
             "success": False,
             "error": str(e),
         }
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_run_history(limit: int = 10, db_path: str = DEFAULT_DB_PATH) -> list:
@@ -944,6 +1002,7 @@ def get_run_history(limit: int = 10, db_path: str = DEFAULT_DB_PATH) -> list:
     Returns:
         List of run dictionaries, or empty list if query fails
     """
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -973,12 +1032,14 @@ def get_run_history(limit: int = 10, db_path: str = DEFAULT_DB_PATH) -> list:
                 "upload_drive": row[10] == 1,
             })
 
-        conn.close()
         return results
 
     except Exception as e:
         logger.warning("Failed to get run history: %s", e)
         return []
+    finally:
+        if conn:
+            conn.close()
 
 
 def store_relevancy_scoring_event(
@@ -1022,6 +1083,7 @@ def store_relevancy_scoring_event(
     """
     import json
 
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1053,7 +1115,6 @@ def store_relevancy_scoring_event(
         ))
 
         conn.commit()
-        conn.close()
 
         logger.debug(
             "Stored relevancy event: run_id=%s, pub_id=%s, score=%s",
@@ -1073,6 +1134,9 @@ def store_relevancy_scoring_event(
             "success": False,
             "error": str(e),
         }
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_relevancy_scores_for_run(
@@ -1090,6 +1154,7 @@ def get_relevancy_scores_for_run(
     """
     import json
 
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1118,13 +1183,15 @@ def get_relevancy_scores_for_run(
                 "created_at": row[7],
             }
 
-        conn.close()
         logger.debug("Retrieved %d relevancy scores for run_id=%s", len(results), run_id)
         return results
 
     except Exception as e:
         logger.warning("Failed to get relevancy scores for run %s: %s", run_id, e)
         return {}
+    finally:
+        if conn:
+            conn.close()
 
 
 def export_relevancy_events_to_jsonl(
@@ -1150,6 +1217,7 @@ def export_relevancy_events_to_jsonl(
     """
     import json
 
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1190,8 +1258,6 @@ def export_relevancy_events_to_jsonl(
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
                 events_exported += 1
 
-        conn.close()
-
         logger.info("Exported %d relevancy events to %s", events_exported, output_path)
 
         return {
@@ -1209,6 +1275,9 @@ def export_relevancy_events_to_jsonl(
             "output_path": output_path,
             "error": str(e),
         }
+    finally:
+        if conn:
+            conn.close()
 
 
 def store_tri_model_scoring_event(
@@ -1279,6 +1348,7 @@ def store_tri_model_scoring_event(
     """
     import json
 
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1335,7 +1405,6 @@ def store_tri_model_scoring_event(
         ))
 
         conn.commit()
-        conn.close()
 
         logger.debug(
             "Stored tri-model event: run_id=%s, pub_id=%s, score=%s",
@@ -1355,6 +1424,9 @@ def store_tri_model_scoring_event(
             "success": False,
             "error": str(e),
         }
+    finally:
+        if conn:
+            conn.close()
 
 
 def update_publication_scoring(
@@ -1407,6 +1479,7 @@ def update_publication_scoring(
     """
     import json
 
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1464,7 +1537,6 @@ def update_publication_scoring(
         )
         updated = cursor.rowcount > 0
         conn.commit()
-        conn.close()
 
         if updated:
             logger.debug(
@@ -1484,6 +1556,9 @@ def update_publication_scoring(
     except Exception as e:
         logger.warning("Failed to update publication scoring: %s", e)
         return {"success": False, "updated": False, "error": str(e)}
+    finally:
+        if conn:
+            conn.close()
 
 
 def export_tri_model_events_to_jsonl(
@@ -1503,6 +1578,7 @@ def export_tri_model_events_to_jsonl(
     """
     import json
 
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1561,8 +1637,6 @@ def export_tri_model_events_to_jsonl(
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
                 events_exported += 1
 
-        conn.close()
-
         logger.info("Exported %d tri-model events to %s", events_exported, output_path)
 
         return {
@@ -1580,6 +1654,9 @@ def export_tri_model_events_to_jsonl(
             "output_path": output_path,
             "error": str(e),
         }
+    finally:
+        if conn:
+            conn.close()
 
 
 def update_publication_canonical_url(
@@ -1603,6 +1680,7 @@ def update_publication_canonical_url(
     Returns:
         Dictionary with update result
     """
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1639,7 +1717,6 @@ def update_publication_canonical_url(
 
         updated = cursor.rowcount > 0
         conn.commit()
-        conn.close()
 
         return {
             "success": True,
@@ -1654,6 +1731,9 @@ def update_publication_canonical_url(
             "updated": False,
             "error": str(e),
         }
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_publications_missing_canonical_url(
@@ -1671,6 +1751,7 @@ def get_publications_missing_canonical_url(
     Returns:
         List of publication dictionaries
     """
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1708,12 +1789,14 @@ def get_publications_missing_canonical_url(
                 "raw_text": row[8],
             })
 
-        conn.close()
         return results
 
     except Exception as e:
         logger.warning("Failed to get publications missing canonical URL: %s", e)
         return []
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_publication_by_id(
@@ -1729,6 +1812,7 @@ def get_publication_by_id(
     Returns:
         Publication dictionary or None
     """
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1741,7 +1825,6 @@ def get_publication_by_id(
         """, (publication_id,))
 
         row = cursor.fetchone()
-        conn.close()
 
         if not row:
             return None
@@ -1765,6 +1848,9 @@ def get_publication_by_id(
     except Exception as e:
         logger.warning("Failed to get publication by ID: %s", e)
         return None
+    finally:
+        if conn:
+            conn.close()
 
 
 def store_publication_embedding(
@@ -1788,6 +1874,7 @@ def store_publication_embedding(
     Returns:
         Dictionary with storage result
     """
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1805,7 +1892,6 @@ def store_publication_embedding(
         ))
 
         conn.commit()
-        conn.close()
 
         logger.debug(
             "Stored embedding for publication %s (model=%s, dim=%d)",
@@ -1825,6 +1911,9 @@ def store_publication_embedding(
             "success": False,
             "error": str(e),
         }
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_publication_embedding(
@@ -1842,6 +1931,7 @@ def get_publication_embedding(
     Returns:
         Dictionary with embedding data or None
     """
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1855,7 +1945,6 @@ def get_publication_embedding(
         """, (publication_id, embedding_model))
 
         row = cursor.fetchone()
-        conn.close()
 
         if not row:
             return None
@@ -1870,6 +1959,9 @@ def get_publication_embedding(
     except Exception as e:
         logger.warning("Failed to get embedding: %s", e)
         return None
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_publications_missing_embeddings(
@@ -1889,6 +1981,7 @@ def get_publications_missing_embeddings(
     Returns:
         List of publication dictionaries
     """
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1926,12 +2019,14 @@ def get_publications_missing_embeddings(
                 "published_date": row[6],
             })
 
-        conn.close()
         return results
 
     except Exception as e:
         logger.warning("Failed to get publications missing embeddings: %s", e)
         return []
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_all_embeddings_for_model(
@@ -1949,6 +2044,7 @@ def get_all_embeddings_for_model(
     Returns:
         List of dictionaries with publication_id, embedding, and metadata
     """
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -1983,12 +2079,14 @@ def get_all_embeddings_for_model(
                 "canonical_url": row[7],
             })
 
-        conn.close()
         return results
 
     except Exception as e:
         logger.warning("Failed to get embeddings for model: %s", e)
         return []
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_all_publications(
@@ -2006,6 +2104,7 @@ def get_all_publications(
     Returns:
         List of publication dictionaries
     """
+    conn = None
     try:
         conn = _get_connection(db_path)
         cursor = conn.cursor()
@@ -2049,9 +2148,11 @@ def get_all_publications(
                 "created_at": row[13],
             })
 
-        conn.close()
         return results
 
     except Exception as e:
         logger.warning("Failed to get all publications: %s", e)
         return []
+    finally:
+        if conn:
+            conn.close()
