@@ -25,6 +25,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+try:
+    import yaml
+except ImportError:  # pragma: no cover - yaml is a project dependency
+    yaml = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -103,19 +108,18 @@ DEFAULT_VENUE_WHITELIST = [
     "jama oncology", "jama network open",
 
     # Screening/detection focused
-    # NOTE: venue match is a plain lowercased substring test (no punctuation
-    # stripping), so list both the full name AND the NLM abbreviation, and keep
-    # punctuation out of the entry where the venue contains commas/ampersands.
-    "cancer epidemiology biomarkers prevention",  # legacy (won't match commas/&)
-    "cancer epidemiology, biomarkers & prevention",  # actual venue string
+    # NOTE: venue matching is punctuation-insensitive (see _normalize_venue), so a
+    # single clean entry covers commas/ampersands/hyphens. List the NLM abbreviation
+    # too when it uses different words than the full name.
+    "cancer epidemiology biomarkers prevention",
     "cancer epidemiol biomarkers prev",  # NLM abbreviation
     "cancer prevention research",
     "international journal of cancer",
     "gut", "gastroenterology",
 
-    # Early detection / screening journals added Jun 2026
+    # Early detection / screening journals
     "journal of the national cancer institute", "jnci", "j natl cancer inst",
-    "ca - a cancer journal for clinicians", "ca cancer j clin",
+    "ca a cancer journal for clinicians", "ca cancer j clin",
     "journal of breath research", "j breath res",
     "sci transl med",  # Science Translational Medicine (NLM abbrev)
     "nature communications", "nat commun",
@@ -123,6 +127,39 @@ DEFAULT_VENUE_WHITELIST = [
     # Preprint servers (for cutting-edge research)
     "biorxiv", "medrxiv", "arxiv",
 ]
+
+
+def venues_from_sources(sources_config_path: str) -> List[str]:
+    """Derive trusted venue names from the configured journal sources.
+
+    Any source we deliberately track as a *specific journal* should always be
+    evaluated by the tri-model — so we auto-trust them rather than relying on the
+    hand-maintained DEFAULT_VENUE_WHITELIST staying in sync with sources.yaml.
+
+    A PubMed source counts as journal-specific when its query uses the
+    ``[Journal]`` field tag. This deliberately EXCLUDES broad firehose queries
+    (e.g. the bare ``cancer`` search) — those are exactly what the gate filters.
+    RSS sources are left to DEFAULT_VENUE_WHITELIST.
+    """
+    if yaml is None:
+        return []
+    try:
+        cfg = yaml.safe_load(Path(sources_config_path).read_text())
+    except (FileNotFoundError, OSError, yaml.YAMLError) as exc:
+        logger.warning("Could not load sources for venue auto-trust (%s): %s",
+                       sources_config_path, exc)
+        return []
+
+    venues: List[str] = []
+    for source in (cfg or {}).get("sources", []) or []:
+        if str(source.get("type", "")).lower() != "pubmed":
+            continue
+        if "[journal]" not in str(source.get("query", "")).lower():
+            continue
+        name = str(source.get("name", "")).strip()
+        if name:
+            venues.append(name)
+    return venues
 
 # Default keywords - high-recall set for early detection
 DEFAULT_KEYWORDS = [
@@ -227,11 +264,26 @@ def _normalize_text(text: str) -> str:
     return normalized
 
 
+def _normalize_venue(text: str) -> str:
+    """Normalize a venue/journal name for matching.
+
+    Lowercases, replaces any run of non-alphanumeric chars with a single space,
+    and collapses whitespace. This makes substring matching robust to commas,
+    ampersands, hyphens and parentheses — e.g. "Cancer Epidemiology, Biomarkers
+    & Prevention" and "CA - A Cancer Journal for Clinicians" normalize cleanly
+    so the whitelist no longer needs punctuation-exact entries.
+    """
+    if not text:
+        return ""
+    stripped = re.sub(r"[^a-z0-9]+", " ", text.lower())
+    return re.sub(r"\s+", " ", stripped).strip()
+
+
 def _extract_venue(pub: Dict[str, Any]) -> str:
     """Extract venue/journal name from publication."""
     # Try multiple fields
     venue = pub.get("venue") or pub.get("source") or pub.get("journal") or ""
-    return _normalize_text(venue)
+    return _normalize_venue(venue)
 
 
 def _match_keywords(text: str, keywords: List[str]) -> List[str]:
@@ -305,10 +357,10 @@ def gate_publication(
     venue_match = False
     keyword_matches = []
 
-    # Check venue whitelist
+    # Check venue whitelist (punctuation-insensitive substring match)
     for whitelisted in venue_whitelist:
-        whitelisted_lower = whitelisted.lower()
-        if whitelisted_lower in venue:
+        whitelisted_norm = _normalize_venue(whitelisted)
+        if whitelisted_norm and whitelisted_norm in venue:
             venue_match = True
             score += 40
             reasons.append(f"venue:{whitelisted}")
@@ -524,12 +576,16 @@ def get_gating_config_hashes(
 def load_gating_config(
     venue_whitelist_path: Optional[str] = None,
     keywords_path: Optional[str] = None,
+    sources_config_path: Optional[str] = "config/sources.yaml",
 ) -> Tuple[List[str], List[str]]:
     """Load gating configuration from files or return defaults.
 
     Args:
         venue_whitelist_path: Path to venue whitelist file (json/yaml/txt)
         keywords_path: Path to keywords file (json/yaml/txt)
+        sources_config_path: Path to sources.yaml; journal-specific sources are
+            auto-trusted so the whitelist can't drift out of sync with config.
+            Pass None to disable auto-trust.
 
     Returns:
         Tuple of (venue_whitelist, keywords)
@@ -538,8 +594,19 @@ def load_gating_config(
         venues = _load_list_from_file(venue_whitelist_path)
         logger.info("Loaded %d venues from %s", len(venues), venue_whitelist_path)
     else:
-        venues = DEFAULT_VENUE_WHITELIST
+        venues = list(DEFAULT_VENUE_WHITELIST)
         logger.info("Using default venue whitelist (%d venues)", len(venues))
+
+    # Auto-trust deliberately-tracked journal sources so we never have to mirror
+    # every sources.yaml addition into the whitelist by hand.
+    if sources_config_path:
+        seen = {v.lower() for v in venues}
+        added = [v for v in venues_from_sources(sources_config_path)
+                 if v.lower() not in seen]
+        if added:
+            venues = venues + added
+            logger.info("Auto-trusted %d journal venues from %s",
+                        len(added), sources_config_path)
 
     if keywords_path:
         keywords = _load_list_from_file(keywords_path)

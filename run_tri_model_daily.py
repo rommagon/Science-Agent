@@ -964,6 +964,7 @@ def main() -> None:
         venue_whitelist, keywords = load_gating_config(
             venue_whitelist_path=args.gate_venue_whitelist,
             keywords_path=args.gate_keywords,
+            sources_config_path=args.config,
         )
 
         # Get config hashes for manifest

@@ -18,7 +18,10 @@ from tri_model.gating import (
     DEFAULT_VENUE_WHITELIST,
     DEFAULT_KEYWORDS,
     get_gating_config_hashes,
+    load_gating_config,
+    venues_from_sources,
     _normalize_text,
+    _normalize_venue,
     _match_keywords,
 )
 
@@ -482,6 +485,68 @@ class TestHelperFunctions:
 
         matches = _match_keywords(text, ["early detection"])
         assert "early detection" in [m.lower() for m in matches]
+
+
+class TestVenueAutoTrust:
+    """Tests for punctuation-insensitive venue matching and sources auto-trust."""
+
+    def test_normalize_venue_strips_punctuation(self):
+        """Commas, ampersands, hyphens and parens should normalize to spaces."""
+        assert _normalize_venue("Cancer Epidemiology, Biomarkers & Prevention") == \
+            "cancer epidemiology biomarkers prevention"
+        assert _normalize_venue("CA - A Cancer Journal for Clinicians") == \
+            "ca a cancer journal for clinicians"
+        assert _normalize_venue("Biology (Basel)") == "biology basel"
+        assert _normalize_venue("") == ""
+
+    def test_punctuation_insensitive_venue_match(self):
+        """A whitelist entry without punctuation should match a punctuated venue."""
+        pub = {
+            "title": "A cohort analysis",
+            "raw_text": "",
+            "source": "Cancer Epidemiology, Biomarkers & Prevention",
+        }
+        result = gate_publication(pub, venue_whitelist=["cancer epidemiology biomarkers prevention"])
+        assert result.venue_match, "comma/ampersand venue should still match"
+
+    def test_venues_from_sources_excludes_broad_query(self, tmp_path):
+        """Only [Journal]-tagged PubMed sources are auto-trusted, not firehoses."""
+        cfg = tmp_path / "sources.yaml"
+        cfg.write_text(
+            "sources:\n"
+            "  - name: PubMed - cancer (broad)\n"
+            "    type: pubmed\n"
+            "    query: cancer\n"
+            "  - name: JAMA\n"
+            "    type: pubmed\n"
+            "    query: '\"JAMA\"[Journal]'\n"
+            "  - name: bioRxiv (all)\n"
+            "    type: rss\n"
+            "    url: http://example.com/rss\n"
+        )
+        venues = venues_from_sources(str(cfg))
+        assert "JAMA" in venues
+        assert "PubMed - cancer (broad)" not in venues  # broad firehose excluded
+        assert "bioRxiv (all)" not in venues  # rss left to default whitelist
+
+    def test_venues_from_sources_missing_file(self):
+        """A missing sources file should degrade gracefully to no auto-trust."""
+        assert venues_from_sources("/nonexistent/sources.yaml") == []
+
+    def test_load_gating_config_auto_trusts_journal_sources(self, tmp_path):
+        """A journal in sources but absent from DEFAULT should still be trusted."""
+        cfg = tmp_path / "sources.yaml"
+        cfg.write_text(
+            "sources:\n"
+            "  - name: Journal of Veterinary Behavior\n"
+            "    type: pubmed\n"
+            "    query: '\"J Vet Behav\"[Journal]'\n"
+        )
+        venues, _ = load_gating_config(sources_config_path=str(cfg))
+        # Not in DEFAULT_VENUE_WHITELIST, but tracked in sources -> must be trusted
+        assert "Journal of Veterinary Behavior" not in DEFAULT_VENUE_WHITELIST
+        pub = {"title": "behavior study", "raw_text": "", "source": "Journal of Veterinary Behavior"}
+        assert gate_publication(pub, venue_whitelist=venues).venue_match
 
 
 # Integration test
