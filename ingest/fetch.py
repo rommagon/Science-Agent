@@ -503,7 +503,7 @@ def _fetch_pubmed_source(
             "term": query,
             "retmax": retmax,
             "retstart": 0,
-            "sort": "date",
+            "sort": "pub_date",  # valid esearch schema; "date" is rejected/ignored by NCBI
             "datetype": "pdat",
             "mindate": mindate,
             "maxdate": maxdate,
