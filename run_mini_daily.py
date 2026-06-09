@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import sys
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -175,10 +176,15 @@ def main():
 
     args = parser.parse_args()
 
-    # Validate configuration
-    is_valid, error = validate_config()
-    if not is_valid:
-        logger.error("Configuration validation failed: %s", error)
+    # Validate configuration (validate_config returns a dict: valid/errors/details)
+    validation = validate_config()
+    if not validation.get("valid", False):
+        for err in validation.get("errors", []):
+            logger.error("Configuration error: %s", err)
+        logger.error(
+            "Configuration validation failed: %s",
+            validation.get("details") or "see errors above",
+        )
         sys.exit(1)
 
     reviewers = get_available_reviewers()
@@ -251,20 +257,25 @@ def main():
 
         logger.info("Fetched %d publications from %d sources", len(publications), len(source_stats))
 
-        # Phase 2: Deduplicate
+        # Phase 2: Deduplicate (returns tuple of (deduped_publications, stats))
         logger.info("Phase 2: Deduplicating...")
-        dedupe_result = deduplicate_publications(publications)
-        deduped_pubs = dedupe_result["unique_publications"]
+        deduped_pubs, dedupe_stats = deduplicate_publications(publications)
 
         logger.info("After deduplication: %d unique publications", len(deduped_pubs))
 
         # Phase 3: Select papers for review (limit to max_papers, sorted by date)
+        # Fetch returns Publication dataclasses; handle dicts too in case they flow through
         sorted_pubs = sorted(
             deduped_pubs,
-            key=lambda p: p.get("date", ""),
+            key=lambda p: (p.get("date") if isinstance(p, dict) else getattr(p, "date", "")) or "",
             reverse=True
         )
-        papers_to_review = sorted_pubs[:args.max_papers]
+        # Downstream review code (shared with Mode B) expects dicts with .get(),
+        # so convert Publication dataclasses; pass dicts through unchanged
+        papers_to_review = [
+            asdict(p) if is_dataclass(p) else p
+            for p in sorted_pubs[:args.max_papers]
+        ]
 
         source_metadata = {
             "fetched": len(publications),

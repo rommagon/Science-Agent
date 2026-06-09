@@ -114,7 +114,7 @@ def _parse_rss_date(date_str: str = None, time_struct: time.struct_time = None) 
 
 def _fetch_rss_source(
     source: dict, since_date: datetime, run_id: str
-) -> tuple[list[Publication], int]:
+) -> tuple[list[Publication], int, Optional[str]]:
     """Fetch publications from a single RSS source.
 
     Args:
@@ -123,14 +123,16 @@ def _fetch_rss_source(
         run_id: Unique identifier for this run
 
     Returns:
-        Tuple of (List of Publication objects, missing_date_count)
+        Tuple of (List of Publication objects, missing_date_count, error)
+        error is None on success, or a message describing why the fetch failed
+        (failures stay non-fatal: the run continues with empty results)
     """
     source_name = source.get("name", "Unknown")
     url = source.get("url")
 
     if not url:
         logger.error("Source '%s' has no URL configured", source_name)
-        return [], 0
+        return [], 0, "No URL configured"
 
     try:
         logger.info("Fetching RSS feed: %s from %s", source_name, url)
@@ -161,7 +163,7 @@ def _fetch_rss_source(
         if response.status_code == 403:
             logger.warning("Source '%s': HTTP 403 Forbidden - server rejected request (User-Agent: %s). Skipping source.",
                          source_name, USER_AGENT)
-            return [], 0
+            return [], 0, "HTTP 403 Forbidden - server rejected request"
 
         response.raise_for_status()
 
@@ -171,7 +173,7 @@ def _fetch_rss_source(
         if feed.bozo and not feed.entries:
             error_msg = str(feed.get("bozo_exception", "Unknown error"))
             logger.error("Failed to parse RSS feed '%s': %s", source_name, error_msg)
-            return [], 0
+            return [], 0, f"Failed to parse RSS feed: {error_msg}"
 
         publications = []
         fetched_count = 0
@@ -260,7 +262,7 @@ def _fetch_rss_source(
             len(publications),
             missing_date_count
         )
-        return publications, missing_date_count
+        return publications, missing_date_count, None
 
     except requests.exceptions.TooManyRedirects:
         logger.error(
@@ -268,20 +270,20 @@ def _fetch_rss_source(
             source_name,
             MAX_REDIRECTS
         )
-        return [], 0
+        return [], 0, f"Too many redirects (>{MAX_REDIRECTS})"
     except requests.exceptions.Timeout:
         logger.error(
             "Source '%s': request timed out after %ds",
             source_name,
             REQUEST_TIMEOUT
         )
-        return [], 0
+        return [], 0, f"Request timed out after {REQUEST_TIMEOUT}s"
     except requests.exceptions.RequestException as e:
         logger.error("Source '%s': HTTP request failed: %s", source_name, e)
-        return [], 0
+        return [], 0, f"HTTP request failed: {e}"
     except Exception as e:
         logger.error("Source '%s': unexpected error: %s", source_name, e)
-        return [], 0
+        return [], 0, f"Unexpected error: {e}"
 
 
 def _parse_pubmed_date(date_str: str) -> tuple[Optional[datetime], bool, bool]:
@@ -470,7 +472,7 @@ def clamp_future_date(
 
 def _fetch_pubmed_source(
     source: dict, since_date: datetime, run_id: str
-) -> tuple[list[Publication], int]:
+) -> tuple[list[Publication], int, Optional[str]]:
     """Fetch publications from PubMed using E-utilities.
 
     Args:
@@ -479,7 +481,9 @@ def _fetch_pubmed_source(
         run_id: Unique identifier for this run
 
     Returns:
-        Tuple of (List of Publication objects, missing_date_count)
+        Tuple of (List of Publication objects, missing_date_count, error)
+        error is None on success, or a message describing why the fetch failed
+        (failures stay non-fatal: the run continues with empty results)
     """
     source_name = source.get("name", "Unknown")
     query = source.get("query")
@@ -487,7 +491,7 @@ def _fetch_pubmed_source(
 
     if not query:
         logger.error("Source '%s' has no query configured", source_name)
-        return [], 0
+        return [], 0, "No query configured"
 
     try:
         logger.info("Fetching PubMed publications: %s (query: '%s', retmax: %d)",
@@ -541,7 +545,7 @@ def _fetch_pubmed_source(
                         continue
                     else:
                         logger.error("Source '%s': PubMed rate limit persists after %d attempts", source_name, max_retries)
-                        return [], 0
+                        return [], 0, f"PubMed ESearch rate limit (429) persisted after {max_retries} attempts"
 
                 response.raise_for_status()
                 search_result = response.json()
@@ -551,21 +555,21 @@ def _fetch_pubmed_source(
                 logger.warning("Source '%s': PubMed ESearch timeout on attempt %d", source_name, attempt + 1)
                 if attempt == max_retries - 1:
                     logger.error("Source '%s': PubMed ESearch timed out after %d attempts", source_name, max_retries)
-                    return [], 0
+                    return [], 0, f"PubMed ESearch timed out after {max_retries} attempts"
             except requests.exceptions.RequestException as e:
                 logger.warning("Source '%s': PubMed ESearch request error on attempt %d: %s", source_name, attempt + 1, e)
                 if attempt == max_retries - 1:
                     logger.error("Source '%s': PubMed ESearch failed after %d attempts", source_name, max_retries)
-                    return [], 0
+                    return [], 0, f"PubMed ESearch failed after {max_retries} attempts: {e}"
 
         if search_result is None:
             logger.error("Source '%s': Failed to get PubMed search results", source_name)
-            return [], 0
+            return [], 0, "Failed to get PubMed search results"
         pmids = search_result.get("esearchresult", {}).get("idlist", [])
 
         if not pmids:
             logger.info("Source '%s': no PMIDs found", source_name)
-            return [], 0
+            return [], 0, None
 
         logger.info("Source '%s': found %d PMIDs", source_name, len(pmids))
 
@@ -602,7 +606,7 @@ def _fetch_pubmed_source(
                         continue
                     else:
                         logger.error("Source '%s': PubMed ESummary rate limit persists after %d attempts", source_name, max_retries)
-                        return [], 0
+                        return [], 0, f"PubMed ESummary rate limit (429) persisted after {max_retries} attempts"
 
                 response.raise_for_status()
                 summary_result = response.json()
@@ -612,16 +616,16 @@ def _fetch_pubmed_source(
                 logger.warning("Source '%s': PubMed ESummary timeout on attempt %d", source_name, attempt + 1)
                 if attempt == max_retries - 1:
                     logger.error("Source '%s': PubMed ESummary timed out after %d attempts", source_name, max_retries)
-                    return [], 0
+                    return [], 0, f"PubMed ESummary timed out after {max_retries} attempts"
             except requests.exceptions.RequestException as e:
                 logger.warning("Source '%s': PubMed ESummary request error on attempt %d: %s", source_name, attempt + 1, e)
                 if attempt == max_retries - 1:
                     logger.error("Source '%s': PubMed ESummary failed after %d attempts", source_name, max_retries)
-                    return [], 0
+                    return [], 0, f"PubMed ESummary failed after {max_retries} attempts: {e}"
 
         if summary_result is None:
             logger.error("Source '%s': Failed to get PubMed summary results", source_name)
-            return [], 0
+            return [], 0, "Failed to get PubMed summary results"
         results = summary_result.get("result", {})
 
         publications = []
@@ -709,7 +713,7 @@ def _fetch_pubmed_source(
             kept_count,
             missing_date_count
         )
-        return publications, missing_date_count
+        return publications, missing_date_count, None
 
     except requests.exceptions.Timeout:
         logger.error(
@@ -717,13 +721,13 @@ def _fetch_pubmed_source(
             source_name,
             REQUEST_TIMEOUT
         )
-        return [], 0
+        return [], 0, f"PubMed request timed out after {REQUEST_TIMEOUT}s"
     except requests.exceptions.RequestException as e:
         logger.error("Source '%s': PubMed API request failed: %s", source_name, e)
-        return [], 0
+        return [], 0, f"PubMed API request failed: {e}"
     except Exception as e:
         logger.error("Source '%s': unexpected error: %s", source_name, e)
-        return [], 0
+        return [], 0, f"Unexpected error: {e}"
 
 
 def fetch_publications(
@@ -754,7 +758,7 @@ def fetch_publications(
         source_name = source.get("name", "Unknown")
 
         if source_type == "rss":
-            publications, missing_dates = _fetch_rss_source(source, since_date, run_id)
+            publications, missing_dates, fetch_error = _fetch_rss_source(source, since_date, run_id)
             all_publications.extend(publications)
             source_stats.append({
                 "name": source_name,
@@ -762,9 +766,11 @@ def fetch_publications(
                 "url": source.get("url", ""),
                 "kept": len(publications),
                 "missing_date_count": missing_dates,
+                "status": "error" if fetch_error else "ok",
+                "error": fetch_error,
             })
         elif source_type == "pubmed":
-            publications, missing_dates = _fetch_pubmed_source(source, since_date, run_id)
+            publications, missing_dates, fetch_error = _fetch_pubmed_source(source, since_date, run_id)
             all_publications.extend(publications)
             source_stats.append({
                 "name": source_name,
@@ -773,6 +779,8 @@ def fetch_publications(
                 "retmax": source.get("retmax", 200),
                 "kept": len(publications),
                 "missing_date_count": missing_dates,
+                "status": "error" if fetch_error else "ok",
+                "error": fetch_error,
             })
         else:
             logger.warning(

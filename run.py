@@ -12,11 +12,12 @@ import sqlite3
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 from uuid import uuid4
 
 import yaml
 
-from config.daily_config import compute_run_context, get_legacy_run_id, WRITE_SHEETS, RunType
+from config.daily_config import compute_run_context, WRITE_SHEETS, RunType
 from diff.dedupe import deduplicate_publications
 from diff.detect_changes import detect_changes
 from enrich.commercial import enrich_publication_commercial
@@ -178,14 +179,73 @@ def _to_text_field(value) -> Optional[str]:
     return str(value)
 
 
+# Enrichment fields written by the SQLite direct path that have no public storage
+# helper yet on Postgres (skipped there until pg_store grows equivalent helpers).
+_ENRICHMENT_FIELDS_WITHOUT_PG_HELPER = (
+    "relevance_score, credibility_score, main_interesting_fact, "
+    "relevance_to_spotitearly, modality_tags, sample_size, study_type, "
+    "key_metrics, sponsor_flag"
+)
+
+
+def _persist_enrichment_via_store(pubs_with_status: list[dict]) -> None:
+    """Persist enrichment on Postgres via the storage abstraction's public helpers.
+
+    Currently only DOI is covered (via update_publication_canonical_url); the
+    remaining enrichment fields are skipped with an explicit log line so the gap
+    is visible instead of silently no-oping.
+    """
+    doi_updated = 0
+    doi_failed = 0
+
+    try:
+        for p in pubs_with_status:
+            doi = p.get("doi")
+            pub_id = p.get("id")
+            if not doi or not pub_id:
+                continue
+
+            result = store.update_publication_canonical_url(
+                publication_id=pub_id,
+                canonical_url=None,
+                doi=doi,
+                database_url=database_url,
+            )
+            if result.get("success"):
+                doi_updated += 1
+            else:
+                doi_failed += 1
+    except Exception as e:
+        logger.warning("persist_enrichment_to_db (postgres) failed: %s (non-blocking)", e)
+        return
+
+    logger.info(
+        "Persisted enrichment to Postgres via storage helpers: %d DOI updates (%d failed)",
+        doi_updated,
+        doi_failed,
+    )
+    logger.info(
+        "Skipped on Postgres (no storage helper yet): %s",
+        _ENRICHMENT_FIELDS_WITHOUT_PG_HELPER,
+    )
+
+
 def persist_enrichment_to_db(outdir: Path, pubs_with_status: list[dict]) -> None:
     """
-    Persist post-ingest enrichment fields to SQLite so they’re queryable even when items
+    Persist post-ingest enrichment fields so they’re queryable even when items
     are UNCHANGED or initially stored as duplicates.
 
     This fixes the “0 inserted, all duplicates” case where scores/DOIs were computed
     but never written to DB.
+
+    On Postgres (DATABASE_URL set) this routes through the storage abstraction's
+    public helpers for the fields they cover; the direct SQLite path below is kept
+    for local runs.
     """
+    if database_url:
+        _persist_enrichment_via_store(pubs_with_status)
+        return
+
     db_path = _default_db_path(outdir)
     if not Path(db_path).exists():
         logger.warning("persist_enrichment_to_db: DB not found at %s (skipping)", db_path)

@@ -34,6 +34,7 @@ from config.expansion_config import (
     LLM_EXPANSION_MAX_RESULTS_PER_QUERY,
 )
 from diff.dedupe import extract_doi, extract_pmid
+from ingest.fetch import PUBMED_POLITENESS_DELAY, _ncbi_auth_params, pick_best_pubmed_date
 from scoring.relevance import compute_relevance_score
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,62 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 ELINK_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi"
 ESUMMARY_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-NCBI_POLITENESS_DELAY = 0.34  # seconds
+# Key-aware politeness delay shared with ingest.fetch (0.11s with NCBI_API_KEY, else 0.34s)
+NCBI_POLITENESS_DELAY = PUBMED_POLITENESS_DELAY  # seconds
+NCBI_MAX_RETRIES = 5
+NCBI_RETRY_BASE_DELAY = 1.0  # seconds
+
+
+def _ncbi_get_with_retry(url: str, params: dict, context: str) -> Optional[requests.Response]:
+    """GET an NCBI E-utilities endpoint with auth params and 429/5xx retry.
+
+    Mirrors the retry-with-exponential-backoff pattern in ingest.fetch and merges
+    in the NCBI auth params (tool/email/api_key) on every call.
+
+    Args:
+        url: E-utilities endpoint URL
+        params: Query parameters (auth params are merged in automatically)
+        context: Label used in log messages
+
+    Returns:
+        Successful Response, or None if all attempts failed
+    """
+    request_params = {**params, **_ncbi_auth_params()}
+
+    for attempt in range(NCBI_MAX_RETRIES):
+        try:
+            if attempt > 0:
+                delay = NCBI_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.info("%s: NCBI retry attempt %d after %.2fs", context, attempt + 1, delay)
+                time.sleep(delay)
+
+            response = requests.get(url, params=request_params, timeout=15)
+
+            if response.status_code == 429 or response.status_code >= 500:
+                logger.warning("%s: NCBI HTTP %d on attempt %d", context, response.status_code, attempt + 1)
+                if attempt < NCBI_MAX_RETRIES - 1:
+                    continue
+                logger.error(
+                    "%s: NCBI HTTP %d persists after %d attempts",
+                    context, response.status_code, NCBI_MAX_RETRIES,
+                )
+                return None
+
+            response.raise_for_status()
+            return response
+
+        except requests.exceptions.Timeout:
+            logger.warning("%s: NCBI request timeout on attempt %d", context, attempt + 1)
+            if attempt == NCBI_MAX_RETRIES - 1:
+                logger.error("%s: NCBI request timed out after %d attempts", context, NCBI_MAX_RETRIES)
+                return None
+        except requests.exceptions.RequestException as e:
+            logger.warning("%s: NCBI request error on attempt %d: %s", context, attempt + 1, e)
+            if attempt == NCBI_MAX_RETRIES - 1:
+                logger.error("%s: NCBI request failed after %d attempts", context, NCBI_MAX_RETRIES)
+                return None
+
+    return None
 
 
 def expand_papers(
@@ -192,8 +248,9 @@ def _expand_pubmed_neighbors(
                 "retmode": "json",
             }
 
-            response = requests.get(ELINK_URL, params=params, timeout=15)
-            response.raise_for_status()
+            response = _ncbi_get_with_retry(ELINK_URL, params, f"Lane A ELink (PMID {pmid})")
+            if response is None:
+                continue
             data = response.json()
 
             # Extract neighbor PMIDs
@@ -417,8 +474,9 @@ def _expand_llm_queries(
                 "mindate": since_date.strftime("%Y/%m/%d"),
             }
 
-            response = requests.get(ESEARCH_URL, params=params, timeout=15)
-            response.raise_for_status()
+            response = _ncbi_get_with_retry(ESEARCH_URL, params, f"Lane C ESearch ('{query[:40]}')")
+            if response is None:
+                continue
             data = response.json()
 
             pmids = data.get("esearchresult", {}).get("idlist", [])
@@ -546,8 +604,9 @@ def _fetch_pubmed_by_pmids(
             "retmode": "json",
         }
 
-        response = requests.get(ESUMMARY_URL, params=params, timeout=15)
-        response.raise_for_status()
+        response = _ncbi_get_with_retry(ESUMMARY_URL, params, f"ESummary ({source_name})")
+        if response is None:
+            return []
         data = response.json()
 
         results = data.get("result", {})
@@ -574,12 +633,16 @@ def _fetch_pubmed_by_pmids(
             url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
             pub_id = compute_id(title, source_name, url)
 
-            # Extract date (simplified)
-            pub_date_str = article.get("pubdate", "")
-            try:
-                pub_date = datetime.strptime(pub_date_str, "%Y %b %d") if pub_date_str else since_date
-            except:
+            # Extract date using the robust parser shared with ingest.fetch
+            pub_date, date_source, date_raw, _low_confidence = pick_best_pubmed_date(article)
+            if pub_date is None:
+                # Genuinely unparseable: fall back to since_date as a last resort, flagged
+                logger.warning(
+                    "%s: PMID %s has unparseable date (%s); falling back to since_date %s",
+                    source_name, pmid, date_raw[:100], since_date.date().isoformat(),
+                )
                 pub_date = since_date
+                date_source = "fallback_since_date"
 
             # Date filter
             if pub_date < since_date:
@@ -599,6 +662,8 @@ def _fetch_pubmed_by_pmids(
                 raw_text=raw_text,
                 summary="",
                 run_id=run_id,
+                date_raw=date_raw,
+                date_source=date_source,
             )
             publications.append(publication)
 
