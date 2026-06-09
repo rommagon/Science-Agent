@@ -30,7 +30,7 @@ from typing import Optional
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from digest.data_access import (
     get_publications_for_week,
@@ -39,6 +39,7 @@ from digest.data_access import (
 )
 from digest.feedback import build_feedback_url
 from digest.pdf_attachments import (
+    downgrade_attached_items,
     enrich_must_reads_with_pdfs,
     finalize_pdf_statuses,
 )
@@ -124,9 +125,15 @@ def render_digest(
             "templates"
         )
 
+    # Autoescape HTML templates only. Escaping the plain-text part would
+    # corrupt titles like "BRCA1 & p53" into "BRCA1 &amp; p53".
     env = Environment(
         loader=FileSystemLoader(templates_dir),
-        autoescape=True,
+        autoescape=select_autoescape(
+            enabled_extensions=("html", "htm", "html.j2", "htm.j2"),
+            default_for_string=True,
+            default=False,
+        ),
     )
 
     html_template = env.get_template("weekly_digest.html.j2")
@@ -525,6 +532,15 @@ Examples:
             )
     data["feedback_enabled"] = feedback_enabled
 
+    # Create the sender up-front so its capabilities are known before the
+    # templates are rendered (config was already validated above).
+    if args.send:
+        send_mode = "gmail" if args.gmail else "sendgrid"
+        sender = get_sender(send_mode=send_mode)
+    else:
+        send_mode = "demo"
+        sender = get_sender(send_mode="demo")
+
     # OA-PDF enrichment (opt-in). Runs before template render so templates
     # can read item.pdf_status / item.proxy_url. Attachments are passed to
     # sender.send() below; pending_fetch transitions happen post-send.
@@ -543,6 +559,21 @@ Examples:
             )
         finally:
             pdf_conn.close()
+
+        # Downgrade BEFORE rendering when the chosen sender cannot transmit
+        # attachments (SendGrid): strip the attachment list and flip those
+        # items to the proxy-link fallback so the email never claims
+        # "PDF attached" for files that will not be there.
+        if args.send and attachments and not sender.supports_attachments():
+            downgraded = downgrade_attached_items(data.get("must_reads", []))
+            logger.warning(
+                "ATTACHMENT DOWNGRADE: the %s sender does not support PDF "
+                "attachments — %d attachment(s) will NOT be sent and %d "
+                "item(s) now show the proxy-link fallback instead of the "
+                "'PDF attached' badge. Use --gmail to send attachments.",
+                send_mode, len(attachments), downgraded,
+            )
+            attachments = []
 
     print(f"Total candidates: {data['total_candidates']}")
     print(f"Must reads selected: {len(data['must_reads'])}")
@@ -618,10 +649,8 @@ Examples:
     recipients = args.to.split(",") if args.to else []
 
     if args.send:
-        send_mode = "gmail" if args.gmail else "sendgrid"
         logger.info("Sending email via %s...", send_mode.upper())
 
-        sender = get_sender(send_mode=send_mode)
         result = sender.send(
             to=recipients,
             subject=subject,
@@ -641,7 +670,6 @@ Examples:
 
     else:
         # Demo mode
-        sender = get_sender(send_mode="demo")
         result = sender.send(
             to=recipients or ["demo@example.com"],
             subject=subject,
@@ -656,6 +684,18 @@ Examples:
     # gone out. Only do this on a real successful send to avoid prematurely
     # marking rows as 'cutoff' during demo/test runs.
     if args.attach_pdfs and args.send and send_status == "success":
+        # Trust the sender's report of what was actually transmitted: if
+        # any prepared attachment was not sent, do NOT mark those rows
+        # 'attached' in pending_fetch.
+        attachments_sent = (result.get("details") or {}).get("attachments_sent", 0)
+        if attachments and attachments_sent < len(attachments):
+            downgraded = downgrade_attached_items(data.get("must_reads", []))
+            logger.warning(
+                "Sender transmitted %d of %d prepared attachment(s); "
+                "downgraded %d item(s) so they are not marked 'attached' "
+                "in pending_fetch.",
+                attachments_sent, len(attachments), downgraded,
+            )
         pdf_conn = _pdf_get_connection(database_url=database_url, sqlite_path=db_path)
         try:
             finalize_pdf_statuses(

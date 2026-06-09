@@ -53,9 +53,16 @@ class EmailSender(ABC):
             Dictionary with:
             - success: bool
             - message: str (success message or error details)
-            - details: dict (optional additional info)
+            - details: dict (optional additional info). On success it
+              includes 'attachments_sent': the number of attachments
+              actually transmitted in a real email (0 for senders that
+              do not support attachments, and 0 for demo sends).
         """
         pass
+
+    def supports_attachments(self) -> bool:
+        """Whether this sender can transmit PDF attachments."""
+        return True
 
 
 class DemoSender(EmailSender):
@@ -123,6 +130,8 @@ class DemoSender(EmailSender):
                 "html_length": len(html_content),
                 "text_length": len(text_content),
                 "attachment_count": len(attachments),
+                # Nothing is actually transmitted in demo mode.
+                "attachments_sent": 0,
             },
         }
 
@@ -159,6 +168,10 @@ class SendGridSender(EmailSender):
                 "Set FROM_EMAIL environment variable or pass from_email parameter."
             )
 
+    def supports_attachments(self) -> bool:
+        """SendGrid attachment support is not wired up — prod uses Gmail."""
+        return False
+
     def send(
         self,
         to: List[str],
@@ -175,9 +188,11 @@ class SendGridSender(EmailSender):
         if attachments:
             # SendGrid attachment support is not wired up — prod uses
             # Gmail. Warn loudly rather than silently dropping PDFs.
+            # The result's details.attachments_sent stays 0 so callers
+            # never treat these attachments as transmitted.
             logger.warning(
-                "SendGrid sender received %d attachment(s); they will be "
-                "skipped. Use Gmail sender for PDF attachments.",
+                "SendGrid sender received %d attachment(s); they will NOT "
+                "be transmitted. Use Gmail sender for PDF attachments.",
                 len(attachments),
             )
         try:
@@ -219,6 +234,8 @@ class SendGridSender(EmailSender):
                     "status_code": response.status_code,
                     "recipients": to,
                     "subject": subject,
+                    # SendGrid attachment support is not wired up.
+                    "attachments_sent": 0,
                 },
             }
 
@@ -355,6 +372,7 @@ class GmailSender(EmailSender):
                     "subject": subject,
                     "from": self.gmail_address,
                     "attachment_count": len(attachments),
+                    "attachments_sent": len(attachments),
                 },
             }
 

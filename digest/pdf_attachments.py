@@ -38,6 +38,11 @@ logger = logging.getLogger(__name__)
 
 Attachment = Tuple[str, bytes]
 
+# Total attachment budget per digest email. Gmail rejects messages at
+# ~25MB; stay well under it to leave headroom for the HTML/text body
+# and base64/MIME overhead (~33%).
+MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
 # Statuses written into each must-read dict:
 #   "attached"    — PDF will be attached to the email
 #   "proxy_only"  — we know about it but can't redistribute; show proxy link
@@ -82,13 +87,21 @@ def enrich_must_reads_with_pdfs(
     must_reads: Iterable[MutableMapping],
     conn,
     upload_base_url: Optional[str] = None,
+    max_total_bytes: int = MAX_TOTAL_ATTACHMENT_BYTES,
 ) -> List[Attachment]:
     """Add pdf_status + proxy_url to each must-read; collect attachments.
 
     Mutates each item dict in-place. Returns the list of (filename, bytes)
     attachments ready to pass to sender.send().
+
+    Total attachment size is capped at max_total_bytes. Items are walked
+    in must-read rank order, so when the budget runs out the higher-ranked
+    papers keep their attachments and the overflow items are downgraded
+    to the proxy-link fallback (order-preserving, not largest-first —
+    rank is the editorial signal we want to honor).
     """
     attachments: List[Attachment] = []
+    total_bytes = 0
 
     for item in must_reads:
         pub_id = item.get("id") or item.get("publication_id")
@@ -110,15 +123,23 @@ def enrich_must_reads_with_pdfs(
         if record and is_attachable_license(record.get("license")):
             pdf_bytes = _read_pdf_bytes(record["file_path"])
             if pdf_bytes:
-                filename = f"{_slug(pub_id)}.pdf"
-                attachments.append((filename, pdf_bytes))
-                item["pdf_status"] = STATUS_ATTACHED
-                item["pdf_license"] = record.get("license")
-                item["pdf_source"] = record.get("source_api")
-                continue
+                if total_bytes + len(pdf_bytes) > max_total_bytes:
+                    logger.warning(
+                        "Attachment budget exceeded (%d + %d > %d bytes); "
+                        "downgrading %s to proxy link",
+                        total_bytes, len(pdf_bytes), max_total_bytes, pub_id,
+                    )
+                else:
+                    filename = f"{_slug(pub_id)}.pdf"
+                    attachments.append((filename, pdf_bytes))
+                    total_bytes += len(pdf_bytes)
+                    item["pdf_status"] = STATUS_ATTACHED
+                    item["pdf_license"] = record.get("license")
+                    item["pdf_source"] = record.get("source_api")
+                    continue
 
-        # Either no pdf_store row, non-attachable license, or file
-        # missing from disk — fall back to proxy link.
+        # Either no pdf_store row, non-attachable license, file missing
+        # from disk, or attachment budget exceeded — fall back to proxy link.
         if item["proxy_url"]:
             item["pdf_status"] = STATUS_PROXY_ONLY
             if record:
@@ -127,10 +148,29 @@ def enrich_must_reads_with_pdfs(
             item["pdf_status"] = STATUS_NONE
 
     logger.info(
-        "PDF enrichment complete: %d attachments prepared",
-        len(attachments),
+        "PDF enrichment complete: %d attachments prepared (%d bytes)",
+        len(attachments), total_bytes,
     )
     return attachments
+
+
+def downgrade_attached_items(must_reads: Iterable[MutableMapping]) -> int:
+    """Downgrade every 'attached' must-read to the proxy-link fallback.
+
+    Used when the chosen sender cannot (or did not) transmit attachments:
+    the rendered email must not claim "PDF attached", and
+    finalize_pdf_statuses must not mark the pending_fetch row 'attached'.
+
+    Returns the number of items downgraded.
+    """
+    downgraded = 0
+    for item in must_reads:
+        if item.get("pdf_status") == STATUS_ATTACHED:
+            item["pdf_status"] = (
+                STATUS_PROXY_ONLY if item.get("proxy_url") else STATUS_NONE
+            )
+            downgraded += 1
+    return downgraded
 
 
 def finalize_pdf_statuses(

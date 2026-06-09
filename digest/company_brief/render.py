@@ -31,12 +31,17 @@ def render_company_brief(
 ) -> Tuple[str, str]:
     """Return ``(html, text)`` for the brief.
 
-    Autoescape is on for the HTML template; the text template is rendered
-    with the same context but escaping is harmless for plain text.
+    Autoescape is on for the HTML template only. The text template must
+    not be escaped, or content like "BRCA1 & p53" would render as
+    "BRCA1 &amp; p53" in the plain-text email part.
     """
     env = Environment(
         loader=FileSystemLoader(templates_dir or _templates_dir()),
-        autoescape=select_autoescape(enabled_extensions=("j2", "html")),
+        autoescape=select_autoescape(
+            enabled_extensions=("html", "htm", "html.j2", "htm.j2"),
+            default_for_string=True,
+            default=False,
+        ),
         trim_blocks=True,
         lstrip_blocks=True,
     )

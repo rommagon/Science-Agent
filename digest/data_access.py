@@ -8,7 +8,7 @@ import logging
 import os
 import re
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Any, Set, Tuple
 
 logger = logging.getLogger(__name__)
@@ -190,21 +190,28 @@ def _build_link(pub: Dict) -> Optional[str]:
 
     All URLs are passed through normalize_url to strip trailing prose
     that may have been concatenated during ingestion (e.g. "...01111-0we").
+
+    Only http/https URLs are ever returned: normalize_url rejects every
+    other scheme (javascript:, data:, file:, ...) and scheme-less strings,
+    and a rejected candidate falls through to the next one in the chain.
+    This guarantees nothing unsafe can reach an href attribute in the
+    rendered templates.
     """
     from enrich.canonical_url import normalize_url
 
-    link = None
-    if pub.get("canonical_url"):
-        link = pub["canonical_url"]
-    elif pub.get("url"):
-        link = pub["url"]
-    elif pub.get("doi"):
-        link = f"https://doi.org/{pub['doi']}"
-    elif pub.get("pmid"):
-        link = f"https://pubmed.ncbi.nlm.nih.gov/{pub['pmid']}/"
+    candidates = [
+        pub.get("canonical_url"),
+        pub.get("url"),
+        f"https://doi.org/{pub['doi']}" if pub.get("doi") else None,
+        f"https://pubmed.ncbi.nlm.nih.gov/{pub['pmid']}/" if pub.get("pmid") else None,
+    ]
 
-    if link:
-        return normalize_url(link) or link
+    for candidate in candidates:
+        if not candidate:
+            continue
+        normalized = normalize_url(candidate)
+        if normalized:
+            return normalized
 
     return None
 
@@ -502,15 +509,22 @@ def _get_publications_sqlite(
 
         cursor = conn.cursor()
 
-        # Query publications in date range
+        # Query publications in date range. Compare ISO date strings
+        # directly (instead of wrapping the column in date()) so SQLite
+        # can use an index on published_date. The upper bound is the day
+        # AFTER week_end, exclusive, which includes any time component
+        # on week_end itself (e.g. "2026-01-25T23:59:00" < "2026-01-26").
         query = f"""
             SELECT {', '.join(select_cols)}
             FROM publications
-            WHERE date(published_date) >= date(?) AND date(published_date) <= date(?)
+            WHERE published_date >= ? AND published_date < ?
             ORDER BY published_date DESC
         """
 
-        cursor.execute(query, (week_start.isoformat(), week_end.isoformat()))
+        cursor.execute(query, (
+            week_start.isoformat(),
+            (week_end + timedelta(days=1)).isoformat(),
+        ))
         rows = [dict(row) for row in cursor.fetchall()]
 
         cursor.close()
@@ -583,7 +597,10 @@ def _process_publications(
         else:
             gpt_eval = {}
 
-        credibility = pub.get("credibility_score") or must_read.get("credibility_score")
+        # Use `is None` (not `or`) so a legitimate score of 0 is preserved.
+        credibility = pub.get("credibility_score")
+        if credibility is None:
+            credibility = must_read.get("credibility_score")
 
         # Individual reviewer scores: prefer centralized, fall back to JSON parsing
         claude_score = pub.get("claude_score")
@@ -636,13 +653,16 @@ def _process_publications(
             (pub.get("raw_text", "")[:500] if pub.get("raw_text") else "")
         )
 
-        # Confidence and agreement: prefer centralized
-        confidence = (
-            pub.get("confidence") or
-            must_read.get("confidence") or
-            tri_model.get("confidence") or
-            gpt_eval.get("confidence") or
-            must_read.get("credibility_confidence", "")
+        # Confidence and agreement: prefer centralized.
+        # `is None` checks (not `or`) so a legitimate 0 is preserved.
+        confidence = next(
+            (c for c in [
+                pub.get("confidence"),
+                must_read.get("confidence"),
+                tri_model.get("confidence"),
+                gpt_eval.get("confidence"),
+            ] if c is not None),
+            must_read.get("credibility_confidence", ""),
         )
 
         agreement_level = (
@@ -663,7 +683,7 @@ def _process_publications(
         if isinstance(disagreements, str):
             try:
                 disagreements = json.loads(disagreements)
-            except:
+            except (json.JSONDecodeError, TypeError):
                 disagreements = [disagreements] if disagreements else []
 
         # Final signals: prefer centralized
@@ -1100,7 +1120,13 @@ def _log_publication_feedback_postgres(
     context: Optional[Dict[str, Any]],
     database_url: Optional[str],
 ) -> bool:
-    """Log publication feedback to PostgreSQL."""
+    """Log publication feedback to PostgreSQL.
+
+    Votes are deduplicated per (week_start, publication_id, source_ip):
+    a repeat vote from the same voter for the same paper/week replaces
+    the previous vote instead of inserting a new row. Votes without a
+    source_ip cannot be attributed to a voter and are inserted as-is.
+    """
     conn = _get_postgres_connection(database_url)
     try:
         cursor = conn.cursor()
@@ -1117,20 +1143,44 @@ def _log_publication_feedback_postgres(
                 context_json TEXT
             )
         """)
+        conn.commit()
+
+        _ensure_feedback_unique_index(
+            conn, cursor,
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_weekly_digest_feedback_voter "
+            "ON weekly_digest_feedback (week_start, publication_id, source_ip)",
+        )
+
+        # Upsert: update existing vote for this voter/paper/week, else insert.
+        # NULL source_ip never matches (NULL <> NULL), so anonymous votes
+        # fall through to plain insert.
         cursor.execute("""
-            INSERT INTO weekly_digest_feedback (
-                week_start, week_end, publication_id, vote,
-                source_ip, user_agent, context_json
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            UPDATE weekly_digest_feedback
+            SET vote = %s, user_agent = %s, context_json = %s, created_at = NOW()
+            WHERE week_start = %s AND publication_id = %s AND source_ip = %s
         """, (
-            week_start,
-            week_end,
-            publication_id,
             vote,
-            source_ip,
             user_agent,
             json.dumps(context or {}),
+            week_start,
+            publication_id,
+            source_ip,
         ))
+        if cursor.rowcount == 0:
+            cursor.execute("""
+                INSERT INTO weekly_digest_feedback (
+                    week_start, week_end, publication_id, vote,
+                    source_ip, user_agent, context_json
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                week_start,
+                week_end,
+                publication_id,
+                vote,
+                source_ip,
+                user_agent,
+                json.dumps(context or {}),
+            ))
         conn.commit()
         cursor.close()
         return True
@@ -1140,6 +1190,24 @@ def _log_publication_feedback_postgres(
         return False
     finally:
         conn.close()
+
+
+def _ensure_feedback_unique_index(conn, cursor, ddl: str) -> None:
+    """Best-effort creation of the feedback dedup unique index.
+
+    Pre-existing duplicate rows (from the old blind-INSERT path) make the
+    index creation fail; in that case we log and continue — the
+    UPDATE-then-INSERT upsert still dedupes new votes without it.
+    """
+    try:
+        cursor.execute(ddl)
+        conn.commit()
+    except Exception as e:
+        logger.warning(
+            "Could not create weekly_digest_feedback unique index "
+            "(pre-existing duplicate rows?): %s", e,
+        )
+        conn.rollback()
 
 
 def _log_publication_feedback_sqlite(
@@ -1152,7 +1220,13 @@ def _log_publication_feedback_sqlite(
     context: Optional[Dict[str, Any]],
     db_path: Optional[str],
 ) -> bool:
-    """Log publication feedback to SQLite."""
+    """Log publication feedback to SQLite.
+
+    Votes are deduplicated per (week_start, publication_id, source_ip):
+    a repeat vote from the same voter for the same paper/week replaces
+    the previous vote instead of inserting a new row. Votes without a
+    source_ip cannot be attributed to a voter and are inserted as-is.
+    """
     conn = _get_sqlite_connection(db_path)
     try:
         cursor = conn.cursor()
@@ -1169,20 +1243,45 @@ def _log_publication_feedback_sqlite(
                 context_json TEXT
             )
         """)
+        conn.commit()
+
+        _ensure_feedback_unique_index(
+            conn, cursor,
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_weekly_digest_feedback_voter "
+            "ON weekly_digest_feedback (week_start, publication_id, source_ip)",
+        )
+
+        # Upsert: update existing vote for this voter/paper/week, else insert.
+        # NULL source_ip never matches (NULL <> NULL), so anonymous votes
+        # fall through to plain insert.
         cursor.execute("""
-            INSERT INTO weekly_digest_feedback (
-                week_start, week_end, publication_id, vote,
-                source_ip, user_agent, context_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            UPDATE weekly_digest_feedback
+            SET vote = ?, user_agent = ?, context_json = ?,
+                created_at = datetime('now')
+            WHERE week_start = ? AND publication_id = ? AND source_ip = ?
         """, (
-            week_start,
-            week_end,
-            publication_id,
             vote,
-            source_ip,
             user_agent,
             json.dumps(context or {}),
+            week_start,
+            publication_id,
+            source_ip,
         ))
+        if cursor.rowcount == 0:
+            cursor.execute("""
+                INSERT INTO weekly_digest_feedback (
+                    week_start, week_end, publication_id, vote,
+                    source_ip, user_agent, context_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                week_start,
+                week_end,
+                publication_id,
+                vote,
+                source_ip,
+                user_agent,
+                json.dumps(context or {}),
+            ))
         conn.commit()
         cursor.close()
         return True

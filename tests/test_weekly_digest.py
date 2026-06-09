@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from digest.data_access import (
     _build_link,
+    _get_publications_sqlite,
     _process_publications,
     _extract_key_findings,
     _clean_why_it_matters,
@@ -64,7 +65,11 @@ class TestBuildLink:
             "doi": None,
             "pmid": "12345678",
         }
-        assert _build_link(pub) == "https://pubmed.ncbi.nlm.nih.gov/12345678/"
+        # normalize_url may strip the trailing slash — accept either form.
+        assert _build_link(pub) in {
+            "https://pubmed.ncbi.nlm.nih.gov/12345678/",
+            "https://pubmed.ncbi.nlm.nih.gov/12345678",
+        }
 
     def test_no_link_available(self):
         """Test that None is returned when no identifiers present."""
@@ -85,6 +90,26 @@ class TestBuildLink:
             "pmid": None,
         }
         assert _build_link(pub) == "https://doi.org/10.1234/test"
+
+    def test_unsafe_scheme_falls_through_to_next_candidate(self):
+        """javascript:/data: URLs never reach hrefs; safe fallback is used."""
+        pub = {
+            "canonical_url": "javascript:alert(1)",
+            "url": "data:text/html,<script>alert(1)</script>",
+            "doi": "10.1234/test",
+            "pmid": None,
+        }
+        assert _build_link(pub) == "https://doi.org/10.1234/test"
+
+    def test_unsafe_scheme_with_no_fallback_returns_none(self):
+        """When the only candidate has a weird scheme, return None."""
+        pub = {
+            "canonical_url": "javascript:alert(1)",
+            "url": None,
+            "doi": None,
+            "pmid": None,
+        }
+        assert _build_link(pub) is None
 
 
 class TestProcessPublications:
@@ -196,8 +221,21 @@ class TestProcessPublications:
         assert result["must_reads"][0]["title"] == "High Relevance Low Credibility"
 
     def test_total_candidates_count(self):
-        """Test that total_candidates reflects input count."""
-        pubs = [{"id": f"pub{i}", "title": f"Pub {i}", "published_date": "2026-01-20", "source": "A"} for i in range(10)]
+        """Test that total_candidates counts scored publications only.
+
+        total_candidates intentionally excludes publications without a
+        relevancy_score, so unscored rows do not inflate the "we reviewed
+        N publications" claim in the digest copy.
+        """
+        pubs = [
+            {"id": f"pub{i}", "title": f"Pub {i}", "published_date": "2026-01-20", "source": "A", "relevancy_score": 60 + i}
+            for i in range(10)
+        ]
+        # Unscored publications must not be counted
+        pubs += [
+            {"id": f"unscored{i}", "title": f"Unscored {i}", "published_date": "2026-01-20", "source": "A"}
+            for i in range(3)
+        ]
 
         result = _process_publications(
             pubs,
@@ -210,6 +248,51 @@ class TestProcessPublications:
         )
 
         assert result["total_candidates"] == 10
+
+
+class TestSqliteDateFilter:
+    """Tests for the sargable ISO-string date filter in the SQLite path."""
+
+    def _make_db(self, db_path, rows):
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("""
+                CREATE TABLE publications (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    published_date TEXT,
+                    source TEXT,
+                    final_relevancy_score REAL
+                )
+            """)
+            conn.executemany(
+                "INSERT INTO publications VALUES (?, ?, ?, ?, ?)", rows
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_week_range_inclusive_with_and_without_time_component(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "pubs.db")
+            self._make_db(db_path, [
+                ("p1", "Start Boundary", "2026-01-19", "A", 90),
+                ("p2", "Mid Week", "2026-01-22", "A", 85),
+                ("p3", "End Day With Time", "2026-01-25T18:30:00", "A", 80),
+                ("p4", "Before Range", "2026-01-18", "A", 95),
+                ("p5", "After Range", "2026-01-26", "A", 95),
+            ])
+
+            result = _get_publications_sqlite(
+                week_start=date(2026, 1, 19),
+                week_end=date(2026, 1, 25),
+                top_n=5,
+                honorable_mentions=0,
+                db_path=db_path,
+            )
+
+            titles = {p["title"] for p in result["must_reads"]}
+            assert titles == {"Start Boundary", "Mid Week", "End Day With Time"}
 
 
 class TestExtractKeyFindings:
@@ -763,3 +846,234 @@ class TestFeedbackPersistence:
                 assert '"timestamp": 123' in row[4]
             finally:
                 conn.close()
+
+    def test_repeat_vote_same_voter_is_deduped(self):
+        """A repeat vote for the same (pub, week, ip) replaces the old row."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "feedback.db")
+            for vote in ("up", "up", "down"):
+                assert log_publication_feedback(
+                    week_start="2026-01-19",
+                    week_end="2026-01-25",
+                    publication_id="pub-abc",
+                    vote=vote,
+                    source_ip="10.0.0.1",
+                    db_path=db_path,
+                ) is True
+
+            conn = sqlite3.connect(db_path)
+            try:
+                rows = conn.execute(
+                    "SELECT vote FROM weekly_digest_feedback"
+                ).fetchall()
+                assert len(rows) == 1
+                assert rows[0][0] == "down"  # latest vote wins
+            finally:
+                conn.close()
+
+    def test_different_voters_not_deduped(self):
+        """Votes from different IPs for the same pub/week are kept."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "feedback.db")
+            for ip in ("10.0.0.1", "10.0.0.2"):
+                assert log_publication_feedback(
+                    week_start="2026-01-19",
+                    week_end="2026-01-25",
+                    publication_id="pub-abc",
+                    vote="up",
+                    source_ip=ip,
+                    db_path=db_path,
+                ) is True
+
+            conn = sqlite3.connect(db_path)
+            try:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM weekly_digest_feedback"
+                ).fetchone()[0]
+                assert count == 2
+            finally:
+                conn.close()
+
+    def test_votes_without_source_ip_are_inserted(self):
+        """Anonymous votes (no IP) cannot be deduped and are all kept."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "feedback.db")
+            for _ in range(2):
+                assert log_publication_feedback(
+                    week_start="2026-01-19",
+                    week_end="2026-01-25",
+                    publication_id="pub-abc",
+                    vote="up",
+                    source_ip=None,
+                    db_path=db_path,
+                ) is True
+
+            conn = sqlite3.connect(db_path)
+            try:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM weekly_digest_feedback"
+                ).fetchone()[0]
+                assert count == 2
+            finally:
+                conn.close()
+
+
+class TestFeedbackReceiverTwoStep:
+    """Tests for the two-step (GET confirm -> POST record) feedback flow.
+
+    GET must never record a vote: corporate email link-scanners prefetch
+    GET links and used to auto-vote.
+    """
+
+    SECRET = "test-receiver-secret"
+
+    def _serve(self, db_path):
+        import threading
+        from http.server import HTTPServer
+        from scripts.collect_digest_feedback import make_handler
+
+        handler = make_handler(
+            secret=self.SECRET,
+            max_age_seconds=3600,
+            db_path=db_path,
+            database_url=None,
+        )
+        server = HTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server, server.server_address[1]
+
+    def _signed_url(self, port, vote="up"):
+        return build_feedback_url(
+            base_url=f"http://127.0.0.1:{port}/feedback",
+            publication_id="pub-1",
+            week_start="2026-06-01",
+            week_end="2026-06-07",
+            vote=vote,
+            secret=self.SECRET,
+        )
+
+    def _post(self, port, query, expect_error=None):
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/feedback",
+            data=query.encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        try:
+            return urllib.request.urlopen(req).read().decode()
+        except urllib.error.HTTPError as e:
+            if expect_error is None:
+                raise
+            assert e.code == expect_error
+            return None
+
+    def _vote_rows(self, db_path):
+        conn = sqlite3.connect(db_path)
+        try:
+            return conn.execute(
+                "SELECT publication_id, vote FROM weekly_digest_feedback"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []  # table not created -> no votes recorded
+        finally:
+            conn.close()
+
+    def test_get_shows_form_without_recording_vote(self):
+        import urllib.request
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "fb.db")
+            server, port = self._serve(db_path)
+            try:
+                body = urllib.request.urlopen(self._signed_url(port)).read().decode()
+            finally:
+                server.shutdown()
+
+            assert '<form method="post"' in body
+            assert "Confirm Thumbs Up" in body
+            assert self._vote_rows(db_path) == []
+
+    def test_post_records_vote(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "fb.db")
+            server, port = self._serve(db_path)
+            try:
+                query = self._signed_url(port).split("?", 1)[1]
+                body = self._post(port, query)
+            finally:
+                server.shutdown()
+
+            assert "has been recorded" in body
+            assert self._vote_rows(db_path) == [("pub-1", "up")]
+
+    def test_repeat_post_replaces_vote(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "fb.db")
+            server, port = self._serve(db_path)
+            try:
+                self._post(port, self._signed_url(port, vote="up").split("?", 1)[1])
+                self._post(port, self._signed_url(port, vote="down").split("?", 1)[1])
+            finally:
+                server.shutdown()
+
+            assert self._vote_rows(db_path) == [("pub-1", "down")]
+
+    def test_post_with_tampered_signature_rejected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "fb.db")
+            server, port = self._serve(db_path)
+            try:
+                query = self._signed_url(port, vote="down").split("?", 1)[1]
+                self._post(port, query.replace("v=down", "v=up"), expect_error=403)
+            finally:
+                server.shutdown()
+
+            assert self._vote_rows(db_path) == []
+
+
+class TestRenderDigestAutoescape:
+    """Tests for per-extension autoescape in render_digest."""
+
+    def _data(self, title):
+        return {
+            "week_start": "2026-01-19",
+            "week_end": "2026-01-25",
+            "total_candidates": 1,
+            "scoring_method": "relevancy_only",
+            "must_reads": [
+                {
+                    "title": title,
+                    "source": "Nature",
+                    "venue": "Nature",
+                    "published_date": "2026-01-20",
+                    "link": "https://example.com/article",
+                    "relevancy_score": 85,
+                    "credibility_score": 70,
+                    "relevancy_ordinal": "High",
+                    "credibility_ordinal": "Moderate",
+                    "why_it_matters": "Matters because of A & B.",
+                    "summary": "Summary.",
+                    "key_findings": [],
+                    "commercial_signals": {},
+                },
+            ],
+            "honorable_mentions": [],
+            "feedback_enabled": False,
+        }
+
+    def test_html_escaped_text_not_escaped(self):
+        from scripts.generate_weekly_digest import render_digest
+
+        html, text = render_digest(self._data("BRCA1 & p53 <study>"))
+
+        # HTML part: escaped
+        assert "BRCA1 &amp; p53 &lt;study&gt;" in html
+        assert "<study>" not in html
+
+        # Text part: raw, no HTML entities
+        assert "BRCA1 & p53 <study>" in text
+        assert "&amp;" not in text
+        assert "&lt;" not in text

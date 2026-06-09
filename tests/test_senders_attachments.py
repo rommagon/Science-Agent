@@ -2,6 +2,7 @@
 alert-email helper in digest/alerts.py.
 """
 
+import sys
 from email import message_from_bytes
 from unittest.mock import MagicMock, patch
 
@@ -13,7 +14,7 @@ from digest.alerts import (
     send_fetch_alert,
     _render_alert,
 )
-from digest.senders import DemoSender, GmailSender
+from digest.senders import DemoSender, GmailSender, SendGridSender
 
 
 SMALL_PDF = b"%PDF-1.4\n" + b"x" * 500 + b"\n%%EOF"
@@ -37,10 +38,49 @@ class TestDemoSenderAttachments:
             attachments=[("paper1.pdf", SMALL_PDF), ("paper2.pdf", SMALL_PDF)],
         )
         assert res["details"]["attachment_count"] == 2
+        # Demo never transmits a real email
+        assert res["details"]["attachments_sent"] == 0
         out = capsys.readouterr().out
         assert "Attachments: 2" in out
         assert "paper1.pdf" in out
         assert "paper2.pdf" in out
+
+
+# --- SendGridSender does not transmit attachments ----------------------
+
+class TestSendGridSenderAttachments:
+    def _mk(self):
+        return SendGridSender(api_key="k", from_email="from@x.com")
+
+    def test_does_not_support_attachments(self):
+        assert self._mk().supports_attachments() is False
+        assert GmailSender(
+            gmail_address="me@x.com", app_password="appp"
+        ).supports_attachments() is True
+        assert DemoSender().supports_attachments() is True
+
+    def test_attachments_reported_as_not_sent(self, caplog):
+        fake_sendgrid = MagicMock()
+        fake_sendgrid.SendGridAPIClient.return_value.send.return_value = (
+            MagicMock(status_code=202)
+        )
+        fake_modules = {
+            "sendgrid": fake_sendgrid,
+            "sendgrid.helpers": MagicMock(),
+            "sendgrid.helpers.mail": MagicMock(),
+        }
+        with patch.dict(sys.modules, fake_modules):
+            res = self._mk().send(
+                ["a@b"], "s", "<p>h</p>", "t",
+                attachments=[("paper.pdf", SMALL_PDF)],
+            )
+
+        assert res["success"] is True
+        # The result must never claim the attachments were transmitted
+        assert res["details"]["attachments_sent"] == 0
+        assert any(
+            "will NOT be transmitted" in rec.getMessage() for rec in caplog.records
+        )
 
 
 # --- GmailSender builds correct MIME structure ------------------------
@@ -79,10 +119,11 @@ class TestGmailSenderAttachments:
                 captured["body"] = body
 
         with patch("smtplib.SMTP_SSL", FakeSMTP):
-            sender.send(
+            res = sender.send(
                 ["a@b"], "s", "<p>h</p>", "t",
                 attachments=[("paper.pdf", SMALL_PDF)],
             )
+        assert res["details"]["attachments_sent"] == 1
         msg = message_from_bytes(captured["body"])
         assert msg.get_content_type() == "multipart/mixed"
 

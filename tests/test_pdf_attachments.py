@@ -11,6 +11,7 @@ from digest.pdf_attachments import (
     STATUS_ATTACHED,
     STATUS_NONE,
     STATUS_PROXY_ONLY,
+    downgrade_attached_items,
     enrich_must_reads_with_pdfs,
     finalize_pdf_statuses,
 )
@@ -128,6 +129,71 @@ class TestEnrichAttached:
         items = [{"title": "no id"}]
         attachments = enrich_must_reads_with_pdfs(items, MagicMock(), "https://up.x")
         assert attachments == []
+        assert items[0]["pdf_status"] == STATUS_NONE
+
+
+class TestAttachmentBudget:
+    """Total attachment size is capped; overflow items downgrade to proxy."""
+
+    def _patch_record(self, monkeypatch, tmp_path):
+        pdf_path = tmp_path / "p.pdf"
+        pdf_path.write_bytes(SMALL_PDF)
+
+        import digest.pdf_attachments as mod
+        monkeypatch.setattr(mod, "get_pdf_record", lambda c, pid: {
+            "publication_id": pid,
+            "file_path": str(pdf_path),
+            "license": "cc-by",
+            "source_api": "unpaywall",
+        })
+
+    def test_overflow_items_downgrade_to_proxy(self, tmp_path, monkeypatch):
+        self._patch_record(monkeypatch, tmp_path)
+
+        items = [_item(id="pub1"), _item(id="pub2"), _item(id="pub3")]
+        # Budget fits exactly two copies of SMALL_PDF
+        budget = len(SMALL_PDF) * 2
+        attachments = enrich_must_reads_with_pdfs(
+            items, MagicMock(), "https://up.x", max_total_bytes=budget,
+        )
+
+        # Order-preserving: the two highest-ranked items keep attachments
+        assert [name for name, _ in attachments] == ["pub1.pdf", "pub2.pdf"]
+        assert items[0]["pdf_status"] == STATUS_ATTACHED
+        assert items[1]["pdf_status"] == STATUS_ATTACHED
+        assert items[2]["pdf_status"] == STATUS_PROXY_ONLY
+        assert items[2]["proxy_url"] is not None
+
+    def test_budget_large_enough_attaches_all(self, tmp_path, monkeypatch):
+        self._patch_record(monkeypatch, tmp_path)
+
+        items = [_item(id="pub1"), _item(id="pub2")]
+        attachments = enrich_must_reads_with_pdfs(
+            items, MagicMock(), "https://up.x",
+            max_total_bytes=len(SMALL_PDF) * 10,
+        )
+
+        assert len(attachments) == 2
+        assert all(i["pdf_status"] == STATUS_ATTACHED for i in items)
+
+
+class TestDowngradeAttachedItems:
+    def test_attached_items_downgrade(self):
+        items = [
+            {"id": "a", "pdf_status": STATUS_ATTACHED, "proxy_url": "https://proxy/a"},
+            {"id": "b", "pdf_status": STATUS_ATTACHED, "proxy_url": None},
+            {"id": "c", "pdf_status": STATUS_PROXY_ONLY, "proxy_url": "https://proxy/c"},
+        ]
+        downgraded = downgrade_attached_items(items)
+
+        assert downgraded == 2
+        assert items[0]["pdf_status"] == STATUS_PROXY_ONLY
+        assert items[1]["pdf_status"] == STATUS_NONE  # no proxy fallback
+        assert items[2]["pdf_status"] == STATUS_PROXY_ONLY  # untouched
+
+    def test_noop_without_attached_items(self):
+        items = [{"id": "a", "pdf_status": STATUS_NONE}]
+        assert downgrade_attached_items(items) == 0
         assert items[0]["pdf_status"] == STATUS_NONE
 
 
