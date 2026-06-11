@@ -48,10 +48,38 @@ jobs:
 
             # Same local-Postgres connection string the daily pipeline
             # exports in tri-model-daily.yml (Postgres is local-only).
-            export DATABASE_URL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
+            DBURL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
+            OUT=/tmp/sie-ai-db-backup.sql.gz
 
-            pg_dump --no-owner --no-privileges "$DATABASE_URL" | gzip > /tmp/sie-ai-db-backup.sql.gz
-            ls -lh /tmp/sie-ai-db-backup.sql.gz
+            # The box host may not have postgresql-client installed; Postgres
+            # typically runs in a container here. Prefer dumping from inside
+            # the running Postgres container (version-matched pg_dump), then
+            # fall back to a host pg_dump, then to a versioned install path.
+            PG_CID=$(docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null \
+                       | awk 'tolower($0) ~ /postgres/ {print $1; exit}')
+
+            if [ -n "$PG_CID" ]; then
+              echo "Dumping via Postgres container: $PG_CID"
+              docker exec "$PG_CID" pg_dump --no-owner --no-privileges "$DBURL" \
+                | gzip > "$OUT"
+            elif command -v pg_dump >/dev/null 2>&1; then
+              echo "Dumping via host pg_dump"
+              pg_dump --no-owner --no-privileges "$DBURL" | gzip > "$OUT"
+            else
+              PGD=$(ls /usr/lib/postgresql/*/bin/pg_dump 2>/dev/null | sort -V | tail -1)
+              if [ -z "$PGD" ]; then
+                echo "ERROR: no pg_dump available (no Postgres container, no host client)" >&2
+                exit 1
+              fi
+              echo "Dumping via $PGD"
+              "$PGD" --no-owner --no-privileges "$DBURL" | gzip > "$OUT"
+            fi
+
+            # Guard against a silent/empty dump.
+            if [ ! -s "$OUT" ] || [ "$(gzip -dc "$OUT" | head -c 1 | wc -c)" -eq 0 ]; then
+              echo "ERROR: backup is empty" >&2; exit 1
+            fi
+            ls -lh "$OUT"
           REMOTE_SCRIPT
 
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \

@@ -32,7 +32,9 @@ def get_connection(database_url: Optional[str] = None, sqlite_path: Optional[str
     url = database_url or os.environ.get("DATABASE_URL")
     if _is_postgres_url(url):
         import psycopg2
-        return psycopg2.connect(url)
+        conn = psycopg2.connect(url)
+        ensure_schema(conn)
+        return conn
 
     path = sqlite_path or os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -40,6 +42,7 @@ def get_connection(database_url: Optional[str] = None, sqlite_path: Optional[str
     )
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    ensure_schema(conn)
     return conn
 
 
@@ -50,6 +53,69 @@ def _is_postgres_conn(conn) -> bool:
 
 def _placeholder(conn) -> str:
     return "%s" if _is_postgres_conn(conn) else "?"
+
+
+def ensure_schema(conn) -> None:
+    """Idempotently create the pdf_store and pending_fetch tables.
+
+    Mirrors Alembic migration 004 (Postgres) / SQLite v10 so the OA-PDF
+    feature self-heals in environments where that migration was never
+    applied (production Postgres is hand-managed — the Alembic chain does
+    not run cleanly from scratch). ``CREATE TABLE IF NOT EXISTS`` makes
+    this a no-op where the tables already exist, matching the runtime-DDL
+    precedent in digest/data_access.py (weekly_digest_sends/_feedback).
+
+    Wrapped defensively: a DDL failure (e.g. a read-only role) is logged
+    and swallowed so it never breaks an otherwise-working connection.
+    """
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pdf_store (
+                publication_id TEXT PRIMARY KEY,
+                file_path TEXT NOT NULL,
+                sha256 TEXT NOT NULL,
+                license TEXT,
+                source_api TEXT NOT NULL,
+                bytes_len INTEGER NOT NULL,
+                fetched_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pdf_store_fetched_at "
+            "ON pdf_store (fetched_at)"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_fetch (
+                publication_id TEXT NOT NULL,
+                week_start DATE NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                original_url TEXT,
+                alerted_at TIMESTAMP,
+                uploaded_at TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (publication_id, week_start)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pending_fetch_week_start "
+            "ON pending_fetch (week_start)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pending_fetch_status "
+            "ON pending_fetch (status)"
+        )
+        conn.commit()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("ensure_schema (pdf tables) skipped: %s", exc)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
 
 # --- pdf_store ---------------------------------------------------------
