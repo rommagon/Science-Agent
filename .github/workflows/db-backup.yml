@@ -51,6 +51,14 @@ jobs:
             DBURL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
             OUT=/tmp/sie-ai-db-backup.sql.gz
 
+            # publication_embeddings has a pgvector 'vector' column, but the
+            # serving container lacks the pgvector library, so COPY of its data
+            # errors ("could not access file vector"). Embeddings are a
+            # regenerable cache (real vectors live in embedding_bytes; rebuild
+            # via scripts/backfill_embeddings.py), so skip that table's DATA —
+            # its schema is still captured. All irreplaceable data is included.
+            DUMP_ARGS="--no-owner --no-privileges --exclude-table-data=publication_embeddings"
+
             # This is a shared host with several Postgres containers (e.g. a
             # co-tenant 'training-postgres'). The sie-ai DB is whichever
             # container PUBLISHES the host's port 5432 — that's the one the
@@ -63,11 +71,10 @@ jobs:
 
             if [ -n "$PG_CID" ]; then
               echo "Dumping via Postgres container publishing :5432 -> $PG_CID"
-              docker exec "$PG_CID" pg_dump --no-owner --no-privileges "$DBURL" \
-                | gzip > "$OUT"
+              docker exec "$PG_CID" pg_dump $DUMP_ARGS "$DBURL" | gzip > "$OUT"
             elif command -v pg_dump >/dev/null 2>&1; then
               echo "Dumping via host pg_dump"
-              pg_dump --no-owner --no-privileges "$DBURL" | gzip > "$OUT"
+              pg_dump $DUMP_ARGS "$DBURL" | gzip > "$OUT"
             else
               PGD=$(ls /usr/lib/postgresql/*/bin/pg_dump 2>/dev/null | sort -V | tail -1)
               if [ -z "$PGD" ]; then
@@ -75,7 +82,7 @@ jobs:
                 exit 1
               fi
               echo "Dumping via $PGD"
-              "$PGD" --no-owner --no-privileges "$DBURL" | gzip > "$OUT"
+              "$PGD" $DUMP_ARGS "$DBURL" | gzip > "$OUT"
             fi
 
             # Guard against a silent/empty dump.
