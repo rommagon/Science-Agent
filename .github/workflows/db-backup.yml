@@ -51,15 +51,18 @@ jobs:
             DBURL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
             OUT=/tmp/sie-ai-db-backup.sql.gz
 
-            # The box host may not have postgresql-client installed; Postgres
-            # typically runs in a container here. Prefer dumping from inside
-            # the running Postgres container (version-matched pg_dump), then
-            # fall back to a host pg_dump, then to a versioned install path.
-            PG_CID=$(docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null \
-                       | awk 'tolower($0) ~ /postgres/ {print $1; exit}')
+            # This is a shared host with several Postgres containers (e.g. a
+            # co-tenant 'training-postgres'). The sie-ai DB is whichever
+            # container PUBLISHES the host's port 5432 — that's the one the
+            # pipeline's localhost:5432 DATABASE_URL actually reaches. Match
+            # by published port, not by name, then dump from inside it
+            # (version-matched pg_dump, its own localhost is the sie-ai DB).
+            # Fall back to a host pg_dump / versioned path if the DB is native.
+            PG_CID=$(docker ps --format '{{.Names}}|{{.Ports}}' 2>/dev/null \
+                       | awk -F'|' '$2 ~ /5432->5432/ {print $1; exit}')
 
             if [ -n "$PG_CID" ]; then
-              echo "Dumping via Postgres container: $PG_CID"
+              echo "Dumping via Postgres container publishing :5432 -> $PG_CID"
               docker exec "$PG_CID" pg_dump --no-owner --no-privileges "$DBURL" \
                 | gzip > "$OUT"
             elif command -v pg_dump >/dev/null 2>&1; then
