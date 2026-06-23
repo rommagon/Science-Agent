@@ -43,6 +43,32 @@ from digest.company_brief.aggregate import BriefConfig, build_company_brief
 from digest.company_brief.render import render_company_brief
 from digest.senders import get_sender, validate_gmail_config
 
+
+def _central_recipients(system_key: str):
+    """Resolve recipients from the central Notification Center (dashboard).
+
+    Returns ``list[str]`` when the dashboard answers (possibly empty → skip the
+    send), or ``None`` when NOTIFY_* isn't configured / the dashboard is
+    unreachable so the caller falls back to the --to list. Stdlib-only.
+    """
+    import urllib.request
+
+    base = (os.environ.get("NOTIFY_API_BASE") or "").rstrip("/")
+    token = os.environ.get("NOTIFY_SERVICE_TOKEN") or ""
+    if not base or not token:
+        return None
+    url = f"{base}/api/notifications/systems/{system_key}/resolve"
+    try:
+        req = urllib.request.Request(url, headers={"X-Service-Token": token})
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 — any failure → caller falls back
+        print(f"  notify resolve failed ({exc}); falling back to --to list")
+        return None
+    if not data.get("enabled", True):
+        return []
+    return [e for e in (data.get("recipients") or []) if e]
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -193,15 +219,31 @@ def main() -> None:
 
     subject = generate_subject(week_start, week_end, args.subject)
     recipients = [r.strip() for r in args.to.split(",")] if args.to else []
+    # Central Notification Center is the source of truth when configured; the
+    # --to list is the fallback. The dashboard returns the de-duplicated,
+    # opt-out-aware list (groups expanded to individuals).
+    central = _central_recipients(os.environ.get("NOTIFY_SYSTEM_KEY", "company-brief"))
+    if central is not None:
+        recipients = central
+        print(f"Recipients resolved from Notification Center: {len(recipients)}")
 
     if args.send:
+        if not recipients:
+            print("No recipients resolved — skipping send.")
+            sys.exit(0)
         sender = get_sender(send_mode="gmail")
-        result = sender.send(to=recipients, subject=subject, html_content=html, text_content=text)
-        if result["success"]:
-            print(f"\nEmail sent successfully to: {', '.join(recipients)}")
-        else:
-            print(f"\nEmail send FAILED: {result['message']}")
+        # One message per recipient (To: just them) so the expanded group list
+        # is never exposed in a shared To: header.
+        failures = 0
+        for r in recipients:
+            result = sender.send(to=[r], subject=subject, html_content=html, text_content=text)
+            if not result["success"]:
+                failures += 1
+                print(f"  send FAILED for {r}: {result['message']}")
+        if failures:
+            print(f"\nEmail send FAILED for {failures}/{len(recipients)} recipient(s)")
             sys.exit(1)
+        print(f"\nEmail sent successfully to {len(recipients)} recipient(s)")
     else:
         get_sender(send_mode="demo").send(
             to=recipients or ["demo@example.com"],

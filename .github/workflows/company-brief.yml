@@ -64,6 +64,7 @@ jobs:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           BRIEF_TOKEN: ${{ secrets.BRIEF_TOKEN }}
+          NOTIFY_SERVICE_TOKEN: ${{ secrets.NOTIFY_SERVICE_TOKEN }}
           # workflow_dispatch inputs — passed via env (never interpolated
           # inline into the script) to prevent shell injection.
           INPUT_RECIPIENTS: ${{ inputs.recipients }}
@@ -96,6 +97,10 @@ jobs:
             export GMAIL_ADDRESS="$GMAIL_ADDRESS"
             export GMAIL_APP_PASSWORD="$GMAIL_APP_PASSWORD"
             export BRIEF_TOKEN="$BRIEF_TOKEN"
+            # Notification Center — resolve company-brief recipients from the
+            # dashboard (loopback host port), --to is the fallback.
+            export NOTIFY_API_BASE="http://127.0.0.1:8001"
+            export NOTIFY_SERVICE_TOKEN="$NOTIFY_SERVICE_TOKEN"
             # Per-tool brief feeds — reached over the EC2 loopback (host port
             # mappings), NOT via nginx, to avoid path-prefix double-routing.
             export GRANT_BRIEF_URL="http://127.0.0.1:8105/api/brief"
