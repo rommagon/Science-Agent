@@ -406,6 +406,7 @@ def get_sender(
     gmail_address: Optional[str] = None,
     gmail_app_password: Optional[str] = None,
     output_path: Optional[str] = None,
+    from_name: Optional[str] = None,
 ) -> EmailSender:
     """Factory function to get appropriate email sender.
 
@@ -416,6 +417,9 @@ def get_sender(
         gmail_address: Gmail address (for gmail mode)
         gmail_app_password: Gmail app password (for gmail mode)
         output_path: Path for demo output (for demo mode)
+        from_name: Display name for the From header. When None, the sender's
+            own default ("SpotItEarly") is used. The Notification Center can
+            supply this live so the From-name is editable without a redeploy.
 
     Returns:
         EmailSender instance
@@ -427,16 +431,19 @@ def get_sender(
         return DemoSender(output_path=output_path)
 
     elif send_mode == "sendgrid":
-        return SendGridSender(
-            api_key=api_key,
-            from_email=from_email,
-        )
+        kwargs = {"api_key": api_key, "from_email": from_email}
+        if from_name:
+            kwargs["from_name"] = from_name
+        return SendGridSender(**kwargs)
 
     elif send_mode == "gmail":
-        return GmailSender(
-            gmail_address=gmail_address,
-            app_password=gmail_app_password,
-        )
+        kwargs = {
+            "gmail_address": gmail_address,
+            "app_password": gmail_app_password,
+        }
+        if from_name:
+            kwargs["from_name"] = from_name
+        return GmailSender(**kwargs)
 
     else:
         raise ValueError(f"Unknown send mode: {send_mode}. Use 'demo', 'sendgrid', or 'gmail'.")

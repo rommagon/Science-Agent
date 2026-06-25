@@ -44,12 +44,14 @@ from digest.company_brief.render import render_company_brief
 from digest.senders import get_sender, validate_gmail_config
 
 
-def _central_recipients(system_key: str):
-    """Resolve recipients from the central Notification Center (dashboard).
+def _resolve_notification(system_key: str):
+    """Resolve the live stream config from the central Notification Center.
 
-    Returns ``list[str]`` when the dashboard answers (possibly empty → skip the
-    send), or ``None`` when NOTIFY_* isn't configured / the dashboard is
-    unreachable so the caller falls back to the --to list. Stdlib-only.
+    Returns a ``dict`` with ``recipients`` (``list[str]``, possibly empty →
+    skip the send) plus the live ``from_name`` / ``reply_to`` / ``from_address``
+    when the dashboard answers, or ``None`` when NOTIFY_* isn't configured / the
+    dashboard is unreachable so the caller falls back to the --to list.
+    Stdlib-only.
     """
     import urllib.request
 
@@ -65,9 +67,15 @@ def _central_recipients(system_key: str):
     except Exception as exc:  # noqa: BLE001 — any failure → caller falls back
         print(f"  notify resolve failed ({exc}); falling back to --to list")
         return None
-    if not data.get("enabled", True):
-        return []
-    return [e for e in (data.get("recipients") or []) if e]
+    recipients = [] if not data.get("enabled", True) else [
+        e for e in (data.get("recipients") or []) if e
+    ]
+    return {
+        "recipients": recipients,
+        "from_name": (data.get("from_name") or "").strip() or None,
+        "reply_to": (data.get("reply_to") or "").strip() or None,
+        "from_address": (data.get("from_address") or "").strip() or None,
+    }
 
 logging.basicConfig(
     level=logging.INFO,
@@ -222,16 +230,23 @@ def main() -> None:
     # Central Notification Center is the source of truth when configured; the
     # --to list is the fallback. The dashboard returns the de-duplicated,
     # opt-out-aware list (groups expanded to individuals).
-    central = _central_recipients(os.environ.get("NOTIFY_SYSTEM_KEY", "company-brief"))
-    if central is not None:
-        recipients = central
+    notify = _resolve_notification(os.environ.get("NOTIFY_SYSTEM_KEY", "company-brief"))
+    resolved_from_name = None
+    if notify is not None:
+        recipients = notify["recipients"]
+        resolved_from_name = notify.get("from_name")
         print(f"Recipients resolved from Notification Center: {len(recipients)}")
+        if resolved_from_name:
+            print(f"From-name resolved from Notification Center: {resolved_from_name!r}")
 
     if args.send:
         if not recipients:
             print("No recipients resolved — skipping send.")
             sys.exit(0)
-        sender = get_sender(send_mode="gmail")
+        # The Notification Center owns the display From-name (editable without a
+        # redeploy). The actual From address stays the authenticated Gmail
+        # mailbox (GMAIL_ADDRESS) — Gmail SMTP can only send as that account.
+        sender = get_sender(send_mode="gmail", from_name=resolved_from_name)
         # One message per recipient (To: just them) so the expanded group list
         # is never exposed in a shared To: header.
         failures = 0
