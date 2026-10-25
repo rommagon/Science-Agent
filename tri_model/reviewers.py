@@ -373,7 +373,10 @@ def gemini_review(paper: Dict) -> Dict:
                     sanitized_prompt,
                     generation_config={
                         "temperature": 0.3,
-                        "max_output_tokens": 1024,
+                        # Gemini 3.x Flash models think before answering and
+                        # thinking tokens count against this cap; 1024 can be
+                        # used up before any JSON is emitted (empty response).
+                        "max_output_tokens": 8192,
                         "response_mime_type": "application/json",
                     },
                     request_options={"timeout": REVIEW_TIMEOUT_SECONDS},

@@ -140,7 +140,7 @@ export SPOTITEARLY_LLM_API_KEY="sk-..."  # or OPENAI_API_KEY
 ```bash
 # Model overrides
 export CLAUDE_MODEL="claude-sonnet-4-5-20250929"  # default
-export GEMINI_MODEL="gemini-2.0-flash-exp"  # default
+export GEMINI_MODEL="gemini-3.8-flash"  # default
 
 # Mini-daily parameters
 export MINI_DAILY_WINDOW_HOURS=6  # default

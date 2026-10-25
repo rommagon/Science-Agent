@@ -23,7 +23,7 @@ Successfully implemented an experimental tri-model review system that:
 - `GEMINI_API_KEY` - Google Gemini API key
 - `SPOTITEARLY_LLM_API_KEY` - OpenAI API key (for evaluator)
 - `CLAUDE_MODEL` - Model override (default: claude-sonnet-4-5-20250929)
-- `GEMINI_MODEL` - Model override (default: gemini-2.0-flash-exp)
+- `GEMINI_MODEL` - Model override (default: gemini-3.8-flash)
 - `MINI_DAILY_WINDOW_HOURS` - Lookback window (default: 6 hours)
 - `MINI_DAILY_MAX_PAPERS` - Max papers to review (default: 10)
 
