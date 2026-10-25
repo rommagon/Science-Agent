@@ -1,0 +1,60 @@
+name: Keepalive (prevent scheduled-workflow auto-disable)
+
+# GitHub auto-disables scheduled workflows after 60 days without repository
+# activity ("disabled_inactivity"). Calling the "enable workflow" REST endpoint
+# resets that timer without needing a commit, so this runs monthly and
+# (re-)enables every workflow listed below, including itself.
+#
+# It also re-enables workflows already auto-disabled for inactivity, so a
+# manual "Run workflow" of this file is enough to recover after a lapse.
+# Workflows a human disabled on purpose ("disabled_manually") are left alone.
+#
+# Keep WORKFLOWS in sync with the files in .github/workflows/.
+
+on:
+  schedule:
+    - cron: '23 5 1 * *'   # 05:23 UTC on the 1st of every month
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      WORKFLOWS: >-
+        company-brief.yml
+        db-backup.yml
+        pdf-reminder.yml
+        prepare-week-pdfs.yml
+        tri-model-daily.yml
+        test.yml
+        weekly-digest.yml
+        keepalive.yml
+    steps:
+      - name: Enable workflows
+        run: |
+          set -euo pipefail
+          failed=0
+          for wf in $WORKFLOWS; do
+            state=$(gh api "repos/${{ github.repository }}/actions/workflows/$wf" --jq .state 2>/dev/null || echo "missing")
+            case "$state" in
+              disabled_manually)
+                echo "::notice::$wf was disabled manually; leaving it disabled"
+                continue ;;
+              missing)
+                echo "::warning::$wf not found; update WORKFLOWS in keepalive.yml"
+                failed=1
+                continue ;;
+            esac
+            if gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$wf/enable" --silent; then
+              echo "$wf: was $state -> enabled"
+            else
+              echo "::error::failed to enable $wf"
+              failed=1
+            fi
+          done
+          exit $failed

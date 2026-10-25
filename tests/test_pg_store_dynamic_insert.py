@@ -134,3 +134,75 @@ def test_map_values_sets_created_at_when_forced():
     assert by_col["id"] == "pub-1"
     assert by_col["title"] == "Paper"
     assert by_col["created_at"] is not None
+
+
+def test_export_tri_model_events_serializes_non_created_at_datetimes(monkeypatch, tmp_path):
+    """published_date (and other timestamp columns) come back from psycopg2 as
+    datetime/date objects; the export must write them as ISO strings instead of
+    failing with "Object of type datetime is not JSON serializable"."""
+    import json
+    from datetime import date, datetime, timezone
+    from decimal import Decimal
+
+    import storage.pg_store as pg_store
+
+    created = datetime(2026, 10, 1, 15, 45, tzinfo=timezone.utc)
+    published = datetime(2026, 9, 30, 0, 0, tzinfo=timezone.utc)
+
+    class FakeCursor:
+        def __init__(self):
+            self.closed = False
+
+        def execute(self, sql, params=None):
+            pass
+
+        def fetchall(self):
+            # Column order follows desired_columns filtered by available_columns:
+            # run_id, publication_id, published_date, gemini_review_json,
+            # final_relevancy_score, credibility_score, created_at
+            return [
+                ("run-1", "pub-1", published, '{"score": 80}', 80, Decimal("0.5"), created),
+                ("run-1", "pub-2", date(2026, 9, 29), None, 40, None, created),
+            ]
+
+        def close(self):
+            self.closed = True
+
+    class FakeConn:
+        def __init__(self, cursor):
+            self._cursor = cursor
+
+        def cursor(self):
+            return self._cursor
+
+    cursor = FakeCursor()
+    conn = FakeConn(cursor)
+    monkeypatch.setattr(pg_store, "_get_connection", lambda url: conn)
+    monkeypatch.setattr(pg_store, "_put_connection", lambda c: None)
+    monkeypatch.setattr(
+        pg_store,
+        "_get_tri_model_events_columns",
+        lambda c, url: {
+            "run_id", "publication_id", "published_date", "gemini_review_json",
+            "final_relevancy_score", "credibility_score", "created_at",
+        },
+    )
+    monkeypatch.setattr(
+        pg_store,
+        "_get_publications_table_metadata",
+        lambda c, url: (set(), None, False, False),
+    )
+
+    out = tmp_path / "events.jsonl"
+    result = pg_store.export_tri_model_events_to_jsonl("run-1", str(out), "postgresql://fake")
+
+    assert result["success"] is True, result["error"]
+    assert result["events_exported"] == 2
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert rows[0]["published_date"] == published.isoformat()
+    assert rows[0]["created_at"] == created.isoformat()
+    assert rows[0]["gemini_review"] == {"score": 80}
+    assert rows[0]["credibility_score"] == "0.5"
+    assert rows[1]["published_date"] == "2026-09-29"
+    assert rows[1]["gemini_review"] is None
+    assert cursor.closed

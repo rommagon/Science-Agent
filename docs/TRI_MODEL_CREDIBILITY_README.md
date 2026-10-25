@@ -172,7 +172,7 @@ python3 run_tri_model_daily.py --lookback-hours 48 --max-papers 100
 ### Optional
 
 - `CLAUDE_MODEL` - Override Claude model (default: claude-3-5-haiku-20241022)
-- `GEMINI_MODEL` - Override Gemini model (default: gemini-2.0-flash-exp)
+- `GEMINI_MODEL` - Override Gemini model (default: gemini-3.8-flash)
 - `SPOTITEARLY_CRED_MODEL` - Override credibility model (default: gpt-4o-mini)
 
 ## GitHub Secrets

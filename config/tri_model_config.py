@@ -10,7 +10,7 @@ Environment Variables:
 - CLAUDE_API_KEY: Anthropic Claude API key
 - CLAUDE_MODEL: Claude model name (default: claude-haiku-4-5-20251001)
 - GEMINI_API_KEY: Google Gemini API key
-- GEMINI_MODEL: Gemini model name (default: gemini-2.0-flash)
+- GEMINI_MODEL: Gemini model name (default: gemini-3.8-flash)
 - MINI_DAILY_WINDOW_HOURS: Lookback window in hours (default: 6)
 - MINI_DAILY_MAX_PAPERS: Maximum papers to review (default: 10)
 """
@@ -83,7 +83,9 @@ GEMINI_API_KEY = sanitize_secret(os.getenv("GEMINI_API_KEY"))
 
 # Model names
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")  # Haiku 4.5 for cost savings
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+# gemini-2.0-flash was shut down by Google (404 "no longer available").
+# Override with the GEMINI_MODEL env var if this one is retired too.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 GPT_EVALUATOR_MODEL = os.getenv("GPT_EVALUATOR_MODEL", "gpt-4o-mini")
 
 # Mini-daily parameters

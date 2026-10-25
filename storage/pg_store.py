@@ -10,7 +10,7 @@ with a warning.
 import json
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple, Any
 
 import psycopg2
@@ -1184,11 +1184,16 @@ def export_tri_model_events_to_jsonl(
                         event[output_key] = None
                     elif is_json:
                         event[output_key] = json.loads(val) if val else None
-                    elif is_datetime:
-                        event[output_key] = val.isoformat() if val else None
+                    elif is_datetime or isinstance(val, (datetime, date)):
+                        # created_at, plus any other timestamp/date column
+                        # (e.g. published_date, which may COALESCE from the
+                        # publications table) -> ISO string for JSON.
+                        event[output_key] = val.isoformat()
                     else:
                         event[output_key] = val
-                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+                # default=str guards any other non-JSON-native DB type
+                # (e.g. Decimal) so one odd value can't abort the export.
+                f.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
                 events_exported += 1
 
         logger.info("Exported %d tri-model events to %s (cols=%d)", events_exported, output_path, len(column_meta))
