@@ -47,6 +47,7 @@ from config.tri_model_config import (
     get_relevancy_rubric_version,
 )
 from tri_model.prompts import get_prompt_hashes
+from tri_model import run_health
 from tri_model.gating import (
     gate_publications,
     filter_for_evaluation,
@@ -110,16 +111,32 @@ def create_output_directories(run_id: str, outdir: Path) -> Path:
 def review_paper_with_tri_model(
     paper: dict,
     available_reviewers: List[str],
+    tracker: Optional["run_health.ModelFailureTracker"] = None,
 ) -> Optional[Dict]:
     """Review a single paper using tri-model system.
 
     Args:
         paper: Paper dictionary with title, source, abstract/raw_text
         available_reviewers: List of available reviewers (claude, gemini)
+        tracker: Optional per-model failure tracker; receives this paper's
+            claude/gemini/gpt outcomes (True ok, False failed, None not run).
 
     Returns:
         Dictionary with review results, or None if all reviewers failed
     """
+    outcomes: Dict[str, Optional[bool]] = {"claude": None, "gemini": None, "gpt": None}
+    try:
+        return _review_paper(paper, available_reviewers, outcomes)
+    finally:
+        if tracker is not None:
+            tracker.record_item(outcomes)
+
+
+def _review_paper(
+    paper: dict,
+    available_reviewers: List[str],
+    outcomes: Dict[str, Optional[bool]],
+) -> Optional[Dict]:
     from tri_model.reviewers import claude_review, gemini_review
     from tri_model.evaluator import gpt_evaluate, reviewer_fallback_evaluate
     from tri_model.credibility import score_paper_credibility
@@ -133,8 +150,10 @@ def review_paper_with_tri_model(
         gemini_future = executor.submit(gemini_review, paper) if "gemini" in available_reviewers else None
 
         if claude_future is not None:
+            outcomes["claude"] = False
             try:
                 claude_result = claude_future.result()
+                outcomes["claude"] = bool(claude_result.get("success"))
                 if not claude_result.get("success"):
                     logger.warning(
                         "Claude review failed for %s: %s",
@@ -145,8 +164,10 @@ def review_paper_with_tri_model(
                 logger.error("Claude reviewer exception for %s: %s", paper.get("id", "unknown")[:16], e)
 
         if gemini_future is not None:
+            outcomes["gemini"] = False
             try:
                 gemini_result = gemini_future.result()
+                outcomes["gemini"] = bool(gemini_result.get("success"))
                 if not gemini_result.get("success"):
                     logger.warning(
                         "Gemini review failed for %s: %s",
@@ -164,8 +185,10 @@ def review_paper_with_tri_model(
 
     # Call GPT evaluator
     gpt_result = None
+    outcomes["gpt"] = False
     try:
         gpt_result = gpt_evaluate(paper, claude_result, gemini_result)
+        outcomes["gpt"] = bool(gpt_result.get("success"))
         if not gpt_result.get("success"):
             logger.warning(
                 "GPT evaluator failed for %s: %s",
@@ -1077,6 +1100,9 @@ def main() -> None:
 
     results = []
     reviewer_failures_count = 0
+    # Per-model failures. A failed reviewer/evaluator degrades gracefully
+    # (reviewer-fallback scores), so len(results) alone overstates success.
+    model_tracker = run_health.new_tracker()
 
     for i, paper in enumerate(papers_to_review, 1):
         # Get gate result if gating was enabled
@@ -1092,7 +1118,7 @@ def main() -> None:
 
         logger.info("Reviewing paper %d/%d%s: %s", i, len(papers_to_review), bucket_str, paper["title"][:60])
 
-        result = review_paper_with_tri_model(paper, available_reviewers)
+        result = review_paper_with_tri_model(paper, available_reviewers, tracker=model_tracker)
 
         if result is None:
             reviewer_failures_count += 1
@@ -1243,9 +1269,13 @@ def main() -> None:
             )
 
     logger.info(
-        "Tri-model review complete: %d successful, %d failures",
+        "Tri-model review complete: %d scored, %d skipped (all reviewers failed); "
+        "model failures: %s; no external model succeeded on %d/%d papers",
         len(results),
         reviewer_failures_count,
+        model_tracker.summary(),
+        model_tracker.fallback_items,
+        model_tracker.items,
     )
 
     # Phase 3: Export tri-model events to JSONL
@@ -1445,8 +1475,19 @@ def main() -> None:
     print(f"Deduplicated:    {dedupe_stats['total_output']} candidates")
     print(f"Usable:          {len(papers_to_review)} papers")
     print(f"Must-Reads:      {len(must_reads_data.get('must_reads', []))} papers")
+    print(f"Model failures:  {model_tracker.summary()}")
     print(f"Output dir:      {run_output_dir}")
     print("=" * 70 + "\n")
+
+    # Very last step: every result is already stored/exported/ingested, so a
+    # red run never loses data. It only refuses to report green when scores
+    # are mostly fallback-only (and annotates any model failing on >20%).
+    warn_rate, error_rate = run_health.thresholds_from_env()
+    exit_code = run_health.check_and_annotate(
+        model_tracker, warn_rate, error_rate, title="Tri-model scoring", log=logger,
+    )
+    if exit_code:
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":
