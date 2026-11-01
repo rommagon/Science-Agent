@@ -53,3 +53,9 @@ data/output/must_reads_heuristic.json
 .hive-mind/
 .mcp.json
 CLAUDE.md
+
+# Environment / secrets (never commit)
+.env
+.env.*
+*.env
+!.env.example
