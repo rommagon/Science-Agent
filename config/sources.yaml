@@ -178,6 +178,21 @@ sources:
     query: '"Nat Med"[Journal]'
     retmax: 200
 
+  # --- MCED / competitor surveillance ---
+  - name: GRAIL (affiliation)
+    type: pubmed
+    # Catches anything with a Grail-affiliated author (PATHFINDER, PATHFINDER-2,
+    # SYMPLIFY, STRIVE, etc.). Covers the GRAIL, LLC / GRAIL, Inc variants.
+    query: '"GRAIL"[Affiliation] OR "GRAIL, LLC"[Affiliation] OR "GRAIL, Inc"[Affiliation]'
+    retmax: 200
+
+  - name: Galleri / PATHFINDER (MCED)
+    type: pubmed
+    # Topic-based net for multi-cancer early detection — catches Grail's own
+    # studies (Galleri, PATHFINDER) plus competitor MCED publications.
+    query: '"Galleri"[Title/Abstract] OR "PATHFINDER"[Title/Abstract] OR "multi-cancer early detection"[Title/Abstract] OR "MCED"[Title/Abstract]'
+    retmax: 200
+
   # --- Canine olfaction / detection dogs ---
   - name: Animals (MDPI)
     type: pubmed
