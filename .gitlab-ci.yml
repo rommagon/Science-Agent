@@ -1,0 +1,519 @@
+# =============================================================================
+# Science-Agent: GitLab CI/CD (inert while the repo lives on GitHub).
+#
+# UNTESTED: written Nov 2026 without access to the company GitLab. Dry-run it
+# against a throwaway project before relying on it. Conventions follow
+# AI_Applications_Dashboard templates/gitlab/{README.md,simple-ssh-deploy.gitlab-ci.yml}.
+#
+# THIS REPO IS PUBLIC. No secret values belong in this file; every secret is a
+# masked/protected CI/CD variable scoped to an environment (see below).
+#
+# Mirrors .github/workflows/:
+#   test.yml              -> test               (MRs + pushes to main)
+#   tri-model-daily.yml   -> tri-model-daily    (schedule + SIE_JOB)
+#   db-backup.yml         -> db-backup          (schedule + SIE_JOB)
+#   company-brief.yml     -> company-brief      (schedule + SIE_JOB)
+#   prepare-week-pdfs.yml -> prepare-week-pdfs  (schedule + SIE_JOB)
+#   pdf-reminder.yml      -> pdf-reminder       (schedule + SIE_JOB)
+#   weekly-digest.yml     -> weekly-digest      (SIE_JOB only; its schedule is off on GitHub too)
+#   "Open failure alert issue" steps -> alert:failure (one job, runs on any failure)
+# Not ported:
+#   keepalive.yml  only stops GitHub disabling idle schedules; GitLab has no
+#                  inactivity auto-disable.
+#
+# Entry points
+#   Schedules (CI/CD > Schedules, target branch main) set SIE_SCHEDULE=<name>.
+#   Manual runs: POST /projects/:id/pipeline ref=main, SIE_JOB=<name>, inputs
+#   as SIE_INPUT_<NAME> (or Build > Pipelines > Run pipeline with the same vars).
+#
+# Secrets model: each job declares environment ai-host/<group>/<job>; each
+# secret is scoped to the narrowest environment pattern that needs it, so a job
+# only receives the secrets its GitHub workflow passed. `test` runs MR code and
+# declares no environment, and fails if a secret reaches it.
+# =============================================================================
+
+variables:
+  SIE_RUNNER_TAG: saas-linux-small-amd64
+  EC2_HOST: ai.spotitearly.com
+  EC2_USER: ubuntu
+  SIE_TITLE: "ci $CI_COMMIT_REF_NAME"
+
+workflow:
+  name: "$SIE_TITLE"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SIE_SCHEDULE
+      variables: { SIE_TITLE: "$SIE_SCHEDULE schedule" }
+    - if: $SIE_JOB && $CI_PIPELINE_SOURCE =~ /^(web|api)$/
+      variables: { SIE_TITLE: "$SIE_JOB" }
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables: { SIE_TITLE: "ci !$CI_MERGE_REQUEST_IID" }
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
+      variables: { SIE_TITLE: "ci main $CI_COMMIT_SHORT_SHA" }
+    # test.yml ran on pull_request + push to main only; other branch pushes don't.
+
+stages:
+  - test
+  - run
+
+# -----------------------------------------------------------------------------
+# Shared: an Alpine job that can SSH to the host. Helpers defined in
+# before_script are available in script (same shell).
+#   sie_ssh ARGS...     ssh to the host (BatchMode, strict host key)
+#   sie_env NAME...     print `export NAME='value'` lines, safely quoted, as the
+#                       remote script's preamble. Secrets travel over the SSH
+#                       stdin (as on GitHub), never on a command line.
+#   sie_check NAME RE   fail unless $NAME is one line matching RE (inputs)
+# The GitHub versions pasted inputs straight into an unquoted heredoc; here
+# inputs are validated and passed as quoted variables instead.
+# -----------------------------------------------------------------------------
+.remote:
+  image: alpine:3.20
+  tags: [$SIE_RUNNER_TAG]
+  stage: run
+  variables:
+    GIT_STRATEGY: none          # these jobs run nothing from the repo
+  before_script:
+    - apk add --no-cache openssh-client openssh-keyscan python3 >/dev/null
+    - |
+      set -eu
+      sie_ssh() { ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o StrictHostKeyChecking=yes "$EC2_USER@$EC2_HOST" "$@"; }
+      sie_q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+      sie_env() { for n in "$@"; do eval "v=\${$n-}"; printf 'export %s=%s\n' "$n" "$(sie_q "$v")"; done; }
+      sie_check() {
+        eval "v=\${$1-}"
+        case "$v" in *"
+      "*) echo "ERROR: $1 contains a newline"; exit 1;; esac
+        printf '%s\n' "$v" | grep -Eq "$2" || { echo "ERROR: invalid $1"; exit 1; }
+      }
+      [ -n "${EC2_SSH_KEY:-}" ] || { echo "ERROR: EC2_SSH_KEY missing (masked + protected, env scope ai-host/*; main only)"; exit 1; }
+      mkdir -p ~/.ssh && chmod 700 ~/.ssh
+      ( umask 077; printf '%s' "$EC2_SSH_KEY" | python3 -c 'import sys,binascii; sys.stdout.buffer.write(binascii.unhexlify("".join(sys.stdin.read().split())))' > ~/.ssh/deploy_key )
+      if [ -n "${EC2_KNOWN_HOSTS:-}" ]; then printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      else ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null; fi
+      [ -s ~/.ssh/known_hosts ] || { echo "ERROR: no host key for $EC2_HOST"; exit 1; }
+  after_script:
+    - rm -f ~/.ssh/deploy_key
+
+# =============================================================================
+# test  (mirrors test.yml)
+# =============================================================================
+test:
+  stage: test
+  image: python:3.11-slim
+  tags: [$SIE_RUNNER_TAG]
+  timeout: 15m
+  variables:
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  cache:
+    key:
+      files: [requirements.txt]
+    paths: [.cache/pip]
+  rules:
+    - if: $SIE_JOB || $SIE_SCHEDULE
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
+  script:
+    - |
+      for v in EC2_SSH_KEY GMAIL_APP_PASSWORD CLAUDE_API_KEY GEMINI_API_KEY SIE_ALERT_TOKEN; do
+        [ -z "$(printenv "$v" || true)" ] || { echo "ERROR: $v reached the test job; scope it to an environment"; exit 1; }
+      done
+    - python -m pip install --upgrade pip
+    - pip install -r requirements.txt
+    - pip install pytest
+    - python -m pytest tests/ -q
+
+# =============================================================================
+# tri-model-daily  (mirrors tri-model-daily.yml; cron "45 15 * * *" UTC)
+# Inputs: SIE_INPUT_MAX_PAPERS ("" = uncapped), SIE_INPUT_LOOKBACK_HOURS (48),
+#         SIE_INPUT_PROMPT_VERSION (v3), SIE_INPUT_INGEST (true)
+# Scheduled runs always ingest (--ingest-backend --ingest-strict), as on GitHub.
+# =============================================================================
+tri-model-daily:
+  extends: .remote
+  timeout: 120m
+  environment: { name: ai-host/tri-model, action: access }
+  resource_group: science-agent-tri-model
+  variables:
+    CLAUDE_MODEL: claude-haiku-4-5-20251001
+    SIE_INPUT_MAX_PAPERS: ""
+    SIE_INPUT_LOOKBACK_HOURS: "48"
+    SIE_INPUT_PROMPT_VERSION: v3
+    SIE_INPUT_INGEST: "true"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "schedule" && $SIE_SCHEDULE == "tri-model-daily"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE =~ /^(web|api)$/ && $SIE_JOB == "tri-model-daily"
+  script:
+    - sie_check SIE_INPUT_MAX_PAPERS '^[0-9]{0,5}$'
+    - sie_check SIE_INPUT_LOOKBACK_HOURS '^[0-9]{1,4}$'
+    - sie_check SIE_INPUT_PROMPT_VERSION '^v[0-9]{1,2}$'
+    - sie_check SIE_INPUT_INGEST '^(true|false)$'
+    - |
+      CMD="python3 -u run_tri_model_daily.py"
+      [ -z "$SIE_INPUT_MAX_PAPERS" ] || CMD="$CMD --max-papers $SIE_INPUT_MAX_PAPERS"
+      CMD="$CMD --lookback-hours $SIE_INPUT_LOOKBACK_HOURS"
+      CMD="$CMD --prompt-version $SIE_INPUT_PROMPT_VERSION"
+      CMD="$CMD --enable-gating"
+      if [ "$SIE_INPUT_INGEST" = "true" ] || [ "$CI_PIPELINE_SOURCE" = "schedule" ]; then
+        CMD="$CMD --ingest-backend --ingest-strict"
+      fi
+      PROMPT_VERSION="$SIE_INPUT_PROMPT_VERSION"
+      echo "Executing on EC2: $CMD"
+      { sie_env CMD PROMPT_VERSION BACKEND_API_KEY CLAUDE_API_KEY CLAUDE_MODEL GEMINI_API_KEY SPOTITEARLY_LLM_API_KEY NCBI_API_KEY; cat <<'REMOTE'
+      set -e
+      cd /home/ubuntu/sie-ai/acitracker_v1
+      git pull --ff-only origin main
+      source .venv/bin/activate
+
+      # Postgres is local to the host
+      export DATABASE_URL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
+      export BACKEND_URL="http://localhost:8000"
+      export TRI_MODEL_MINI_DAILY="true"
+      export TRI_MODEL_PROMPT_VERSION="$PROMPT_VERSION"
+      export PYTHONUTF8=1
+      export PYTHONIOENCODING=utf-8
+      export LC_ALL=C.UTF-8
+      export LANG=C.UTF-8
+
+      echo "Running: $CMD"
+      $CMD < /dev/null
+      REMOTE
+      } | sie_ssh bash -s
+    # "Sync publications to LinkedIn Manager": only after success, and its
+    # failure doesn't fail the job (continue-on-error: true on GitHub).
+    - |
+      { sie_env LINKEDIN_MANAGER_SUPABASE_URL LINKEDIN_MANAGER_SUPABASE_SERVICE_KEY; cat <<'REMOTE'
+      cd /home/ubuntu/sie-ai/acitracker_v1
+      source .venv/bin/activate
+      export DATABASE_URL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
+      python3 -u sync_to_linkedin.py < /dev/null
+      REMOTE
+      } | sie_ssh bash -s || echo "WARNING: LinkedIn Manager sync failed (non-fatal, as on GitHub)"
+
+# =============================================================================
+# db-backup  (mirrors db-backup.yml; cron "0 4 * * *" UTC)
+# One of the only off-server copies of the shared sie-ai database. Stricter
+# than GitHub: the dump is checked again on the runner (gzip integrity, pg_dump's
+# completion footer, minimum size, checksum matches the host's copy), the job
+# retries on transient failures, and the artifact is Developer-only.
+# =============================================================================
+db-backup:
+  extends: .remote
+  timeout: 30m
+  environment: { name: ai-host/db-backup, action: access }
+  resource_group: science-agent-db-backup   # the host temp path is fixed
+  retry:
+    max: 2
+    when: [always]
+  variables:
+    GIT_STRATEGY: none
+    SIE_BACKUP_MIN_BYTES: "1048576"   # uncompressed; today's dump is ~38 MB gzipped
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "schedule" && $SIE_SCHEDULE == "db-backup"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE =~ /^(web|api)$/ && $SIE_JOB == "db-backup"
+  script:
+    - apk add --no-cache gzip coreutils >/dev/null
+    - |
+      set -o pipefail
+      STAMP=$(date -u +%F)
+      OUT="db-backup-$STAMP.sql.gz"
+      # Remote part verbatim from db-backup.yml (quoted heredoc: runs as-is on the host).
+      sie_ssh bash -s <<'REMOTE'
+      set -e
+      set -o pipefail
+
+      DBURL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
+      OUT=/tmp/sie-ai-db-backup.sql.gz
+
+      # publication_embeddings' pgvector data can't be COPYed by the serving
+      # container and is a regenerable cache; its schema is still captured.
+      DUMP_ARGS="--no-owner --no-privileges --exclude-table-data=publication_embeddings"
+
+      # The sie-ai DB is whichever container PUBLISHES host port 5432 (the host
+      # has other Postgres containers). Dump from inside it; fall back to a host
+      # pg_dump if the DB is native.
+      PG_CID=$(docker ps --format '{{.Names}}|{{.Ports}}' 2>/dev/null \
+                 | awk -F'|' '$2 ~ /5432->5432/ {print $1; exit}')
+
+      if [ -n "$PG_CID" ]; then
+        echo "Dumping via Postgres container publishing :5432 -> $PG_CID"
+        docker exec "$PG_CID" pg_dump $DUMP_ARGS "$DBURL" | gzip > "$OUT"
+      elif command -v pg_dump >/dev/null 2>&1; then
+        echo "Dumping via host pg_dump"
+        pg_dump $DUMP_ARGS "$DBURL" | gzip > "$OUT"
+      else
+        PGD=$(ls /usr/lib/postgresql/*/bin/pg_dump 2>/dev/null | sort -V | tail -1)
+        if [ -z "$PGD" ]; then
+          echo "ERROR: no pg_dump available (no Postgres container, no host client)" >&2
+          exit 1
+        fi
+        echo "Dumping via $PGD"
+        "$PGD" $DUMP_ARGS "$DBURL" | gzip > "$OUT"
+      fi
+
+      # Guard against a silent/empty dump.
+      if [ ! -s "$OUT" ] || [ "$(gzip -dc "$OUT" | head -c 1 | wc -c)" -eq 0 ]; then
+        echo "ERROR: backup is empty" >&2; exit 1
+      fi
+      ls -lh "$OUT"
+      REMOTE
+      REMOTE_SUM=$(sie_ssh sha256sum /tmp/sie-ai-db-backup.sql.gz | cut -d' ' -f1)
+      scp -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+        "$EC2_USER@$EC2_HOST:/tmp/sie-ai-db-backup.sql.gz" "$OUT"
+      sie_ssh rm -f /tmp/sie-ai-db-backup.sql.gz
+
+      # Verify on the runner. Every check fails the job (and so the alert).
+      fail() { echo "ERROR: db backup $OUT: $*" >&2; exit 1; }
+      [ -s "$OUT" ] || fail "file missing or empty"
+      LOCAL_SUM=$(sha256sum "$OUT" | cut -d' ' -f1)
+      [ "$LOCAL_SUM" = "$REMOTE_SUM" ] || fail "checksum mismatch after copy"
+      gzip -t "$OUT" || fail "gzip stream is corrupt"
+      BYTES=$(gzip -dc "$OUT" | wc -c)
+      [ "$BYTES" -ge "$SIE_BACKUP_MIN_BYTES" ] || fail "only $BYTES bytes uncompressed (< $SIE_BACKUP_MIN_BYTES)"
+      FOOTER=$(gzip -dc "$OUT" | tail -n 20)
+      case "$FOOTER" in *"PostgreSQL database dump complete"*) ;; *) fail "no pg_dump completion footer (truncated dump?)";; esac
+      echo "OK: $OUT $(du -h "$OUT" | cut -f1) gz, $BYTES bytes uncompressed, sha256 $LOCAL_SUM"
+  artifacts:
+    name: "db-backup-$CI_JOB_ID"
+    when: on_success
+    expire_in: 30 days
+    access: developer          # the project is public: never let anonymous users download the DB
+    paths: [db-backup-*.sql.gz]
+
+# =============================================================================
+# company-brief  (mirrors company-brief.yml; cron "0 6 * * 4" UTC)
+# Inputs: SIE_INPUT_RECIPIENTS, SIE_INPUT_WEEK_START, SIE_INPUT_WEEK_END,
+#         SIE_INPUT_SCIENCE_TOP_N (5), SIE_INPUT_SCIENCE_MIN_SCORE (70),
+#         SIE_INPUT_GRANT_MUST_APPLY (75)
+# =============================================================================
+company-brief:
+  extends: .remote
+  timeout: 15m
+  environment: { name: ai-host/mail/company-brief, action: access }
+  resource_group: science-agent-company-brief
+  variables:
+    SIE_INPUT_RECIPIENTS: "research@spotitearly.com,rom@spotitearly.com"
+    SIE_INPUT_WEEK_START: ""
+    SIE_INPUT_WEEK_END: ""
+    SIE_INPUT_SCIENCE_TOP_N: "5"
+    SIE_INPUT_SCIENCE_MIN_SCORE: "70"
+    SIE_INPUT_GRANT_MUST_APPLY: "75"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "schedule" && $SIE_SCHEDULE == "company-brief"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE =~ /^(web|api)$/ && $SIE_JOB == "company-brief"
+  script:
+    - sie_check SIE_INPUT_RECIPIENTS '^[A-Za-z0-9._%+@,-]+$'
+    - sie_check SIE_INPUT_WEEK_START '^([0-9]{4}-[0-9]{2}-[0-9]{2})?$'
+    - sie_check SIE_INPUT_WEEK_END '^([0-9]{4}-[0-9]{2}-[0-9]{2})?$'
+    - sie_check SIE_INPUT_SCIENCE_TOP_N '^[0-9]{1,3}$'
+    - sie_check SIE_INPUT_SCIENCE_MIN_SCORE '^[0-9]{1,3}$'
+    - sie_check SIE_INPUT_GRANT_MUST_APPLY '^[0-9]{1,3}$'
+    - |
+      RECIPIENTS="$SIE_INPUT_RECIPIENTS"; WEEK_START="$SIE_INPUT_WEEK_START"; WEEK_END="$SIE_INPUT_WEEK_END"
+      SCIENCE_TOP_N="$SIE_INPUT_SCIENCE_TOP_N"; SCIENCE_MIN_SCORE="$SIE_INPUT_SCIENCE_MIN_SCORE"
+      GRANT_MUST_APPLY="$SIE_INPUT_GRANT_MUST_APPLY"
+      { sie_env RECIPIENTS WEEK_START WEEK_END SCIENCE_TOP_N SCIENCE_MIN_SCORE GRANT_MUST_APPLY GMAIL_ADDRESS GMAIL_APP_PASSWORD BRIEF_TOKEN NOTIFY_SERVICE_TOKEN; cat <<'REMOTE'
+      set -e
+      cd /home/ubuntu/sie-ai/acitracker_v1
+      git pull --ff-only origin main
+      source .venv/bin/activate
+
+      export DATABASE_URL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
+      # Notification Center: recipients come from the dashboard; --to is the fallback.
+      export NOTIFY_API_BASE="http://127.0.0.1:8001"
+      # Per-tool brief feeds over the host loopback, NOT via nginx.
+      export GRANT_BRIEF_URL="http://127.0.0.1:8105/api/brief"
+      export REGULATORY_BRIEF_URL="http://127.0.0.1:8100/api/summaries/brief"
+      export BI_BRIEF_URL="http://127.0.0.1:8108/api/brief"
+      export PYTHONUTF8=1
+      export PYTHONIOENCODING=utf-8
+
+      WEEK_ARGS=""
+      if [ -n "$WEEK_START" ]; then WEEK_ARGS="--week-start $WEEK_START"; fi
+      if [ -n "$WEEK_END" ]; then WEEK_ARGS="$WEEK_ARGS --week-end $WEEK_END"; fi
+
+      echo "Recipients: $RECIPIENTS"
+
+      python3 -u scripts/generate_company_brief.py \
+        $WEEK_ARGS \
+        --send \
+        --gmail \
+        --to "$RECIPIENTS" \
+        --science-top-n "$SCIENCE_TOP_N" \
+        --science-min-score "$SCIENCE_MIN_SCORE" \
+        --grant-must-apply "$GRANT_MUST_APPLY" \
+        --verbose < /dev/null
+      REMOTE
+      } | sie_ssh bash -s
+      echo "Company Brief sent (fallback recipients: $RECIPIENTS)"
+
+# =============================================================================
+# prepare-week-pdfs  (mirrors prepare-week-pdfs.yml; cron "0 18 * * 3" UTC)
+# pdf-reminder       (mirrors pdf-reminder.yml;      cron "0 3 * * 4" UTC)
+# Both run scripts/prepare_week_pdfs.py; the reminder adds --reminder and
+# never writes. Inputs: SIE_INPUT_ALERT_RECIPIENTS (rom@spotitearly.com),
+# SIE_INPUT_TOP_N (5), SIE_INPUT_MIN_SCORE (70), SIE_INPUT_DRY_RUN (prepare only)
+# =============================================================================
+.pdf-job:
+  extends: .remote
+  environment: { name: ai-host/mail/pdf-prep, action: access }
+  variables:
+    SIE_INPUT_ALERT_RECIPIENTS: "rom@spotitearly.com"
+    SIE_INPUT_TOP_N: "5"
+    SIE_INPUT_MIN_SCORE: "70"
+    SIE_INPUT_DRY_RUN: "false"
+  script:
+    - sie_check SIE_INPUT_ALERT_RECIPIENTS '^[A-Za-z0-9._%+@,-]+$'
+    - sie_check SIE_INPUT_TOP_N '^[0-9]{1,3}$'
+    - sie_check SIE_INPUT_MIN_SCORE '^[0-9]{1,3}$'
+    - sie_check SIE_INPUT_DRY_RUN '^(true|false)$'
+    - |
+      RECIPIENTS="$SIE_INPUT_ALERT_RECIPIENTS"; TOP_N="$SIE_INPUT_TOP_N"; MIN_SCORE="$SIE_INPUT_MIN_SCORE"
+      DRY_RUN="$SIE_INPUT_DRY_RUN"
+      { sie_env PDF_MODE RECIPIENTS TOP_N MIN_SCORE DRY_RUN GMAIL_ADDRESS GMAIL_APP_PASSWORD UPLOAD_BASE_URL UNPAYWALL_EMAIL; cat <<'REMOTE'
+      set -e
+      cd /home/ubuntu/sie-ai/acitracker_v1
+      git pull --ff-only origin main
+      source .venv/bin/activate
+
+      export DATABASE_URL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
+      export PYTHONUTF8=1
+      export PYTHONIOENCODING=utf-8
+
+      if [ "$PDF_MODE" = "reminder" ]; then
+        # Reminder mode: no fetch, no writes; emails only if pending_fetch
+        # still has rows for this week (idempotent).
+        python3 -u scripts/prepare_week_pdfs.py \
+          --week this \
+          --top-n "$TOP_N" \
+          --min-score "$MIN_SCORE" \
+          --upload-base-url "$UPLOAD_BASE_URL" \
+          --unpaywall-email "$UNPAYWALL_EMAIL" \
+          --alert-to "$RECIPIENTS" \
+          --gmail \
+          --reminder \
+          --verbose < /dev/null
+      else
+        DRY_FLAG=""
+        if [ "$DRY_RUN" = "true" ]; then DRY_FLAG="--dry-run"; fi
+        mkdir -p /home/ubuntu/sie-ai/pdfs
+        python3 -u scripts/prepare_week_pdfs.py \
+          --week this \
+          --top-n "$TOP_N" \
+          --min-score "$MIN_SCORE" \
+          --pdf-dir /home/ubuntu/sie-ai/pdfs \
+          --upload-base-url "$UPLOAD_BASE_URL" \
+          --unpaywall-email "$UNPAYWALL_EMAIL" \
+          --alert-to "$RECIPIENTS" \
+          --gmail \
+          $DRY_FLAG \
+          --verbose < /dev/null
+      fi
+      REMOTE
+      } | sie_ssh bash -s
+
+prepare-week-pdfs:
+  extends: .pdf-job
+  timeout: 20m
+  resource_group: science-agent-pdf-prep
+  variables:
+    PDF_MODE: prepare
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "schedule" && $SIE_SCHEDULE == "prepare-week-pdfs"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE =~ /^(web|api)$/ && $SIE_JOB == "prepare-week-pdfs"
+
+pdf-reminder:
+  extends: .pdf-job
+  timeout: 10m
+  resource_group: science-agent-pdf-prep
+  variables:
+    PDF_MODE: reminder
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "schedule" && $SIE_SCHEDULE == "pdf-reminder"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE =~ /^(web|api)$/ && $SIE_JOB == "pdf-reminder"
+
+# =============================================================================
+# weekly-digest  (mirrors weekly-digest.yml; manual only — its Thursday schedule
+# is disabled on GitHub because Science now ships in the Company Brief)
+# Inputs: SIE_INPUT_LOOKBACK_DAYS (7), SIE_INPUT_RECIPIENTS,
+#         SIE_INPUT_MIN_SCORE (70), SIE_INPUT_TOP_N (5)
+# =============================================================================
+weekly-digest:
+  extends: .remote
+  timeout: 15m
+  environment: { name: ai-host/mail/weekly-digest, action: access }
+  variables:
+    SIE_INPUT_LOOKBACK_DAYS: "7"
+    SIE_INPUT_RECIPIENTS: "research@spotitearly.com,rom@spotitearly.com"
+    SIE_INPUT_MIN_SCORE: "70"
+    SIE_INPUT_TOP_N: "5"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE =~ /^(web|api)$/ && $SIE_JOB == "weekly-digest"
+  script:
+    - sie_check SIE_INPUT_LOOKBACK_DAYS '^[0-9]{1,3}$'
+    - sie_check SIE_INPUT_RECIPIENTS '^[A-Za-z0-9._%+@,-]+$'
+    - sie_check SIE_INPUT_MIN_SCORE '^[0-9]{1,3}$'
+    - sie_check SIE_INPUT_TOP_N '^[0-9]{1,3}$'
+    - |
+      RECIPIENTS="$SIE_INPUT_RECIPIENTS"; MIN_SCORE="$SIE_INPUT_MIN_SCORE"; TOP_N="$SIE_INPUT_TOP_N"
+      LOOKBACK="$SIE_INPUT_LOOKBACK_DAYS"
+      { sie_env RECIPIENTS MIN_SCORE TOP_N LOOKBACK GMAIL_ADDRESS GMAIL_APP_PASSWORD DIGEST_FEEDBACK_SECRET DIGEST_FEEDBACK_BASE_URL UPLOAD_BASE_URL; cat <<'REMOTE'
+      set -e
+      cd /home/ubuntu/sie-ai/acitracker_v1
+      git pull --ff-only origin main
+      source .venv/bin/activate
+
+      export DATABASE_URL="postgresql://sie-ai:postgres@localhost:5432/sie-ai"
+      export PYTHONUTF8=1
+      export PYTHONIOENCODING=utf-8
+
+      WEEK_START_DATE=$(date -u -d "-$LOOKBACK days" +%F)
+      WEEK_END_DATE=$(date -u +%F)
+
+      echo "Window: $WEEK_START_DATE to $WEEK_END_DATE ($LOOKBACK days back)"
+      echo "Recipients: $RECIPIENTS"
+
+      python3 -u scripts/generate_weekly_digest.py \
+        --week-start "$WEEK_START_DATE" \
+        --week-end "$WEEK_END_DATE" \
+        --send \
+        --gmail \
+        --to "$RECIPIENTS" \
+        --min-score "$MIN_SCORE" \
+        --top-n "$TOP_N" \
+        --verbose < /dev/null
+      REMOTE
+      } | sie_ssh bash -s
+
+# =============================================================================
+# alert:failure  (mirrors every scheduled workflow's "Open failure alert issue"
+# step). Runs only when a job in a scheduled or SIE_JOB pipeline failed, and
+# opens an issue labelled workflow-failure (GitLab creates the label if needed).
+# Needs SIE_ALERT_TOKEN: project access token, Reporter, scope `api`,
+# env scope `alerts`. GitLab also emails the schedule owner on failure.
+# =============================================================================
+alert:failure:
+  stage: .post
+  image: alpine:3.20
+  tags: [$SIE_RUNNER_TAG]
+  timeout: 5m
+  environment: { name: alerts, action: access }
+  variables:
+    GIT_STRATEGY: none
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && ($SIE_SCHEDULE || $SIE_JOB)
+      when: on_failure
+  script:
+    - apk add --no-cache curl >/dev/null
+    - |
+      set -eu
+      NAME="${SIE_SCHEDULE:-${SIE_JOB:-pipeline}}"
+      TITLE="[workflow-failure] $NAME failed on $(date -u +%F)"
+      BODY="Pipeline failed (label: workflow-failure): $CI_PIPELINE_URL"
+      echo "$TITLE"
+      [ -n "${SIE_ALERT_TOKEN:-}" ] || { echo "ERROR: SIE_ALERT_TOKEN missing (env scope alerts); no issue opened"; exit 1; }
+      curl -sS --fail -X POST -H "PRIVATE-TOKEN: $SIE_ALERT_TOKEN" \
+        --data-urlencode "title=$TITLE" --data-urlencode "description=$BODY" \
+        --data-urlencode "labels=workflow-failure" \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/issues" >/dev/null
+      echo "Opened issue: $TITLE"
