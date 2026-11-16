@@ -86,6 +86,7 @@ stages:
         printf '%s\n' "$v" | grep -Eq "$2" || { echo "ERROR: invalid $1"; exit 1; }
       }
       [ -n "${EC2_SSH_KEY:-}" ] || { echo "ERROR: EC2_SSH_KEY missing (masked + protected, env scope ai-host/*; main only)"; exit 1; }
+      [ "$EC2_HOST" = "ai.spotitearly.com" ] || { echo "ERROR: EC2_HOST is not ai.spotitearly.com (overridden by a pipeline variable?) - refusing to use the SSH key"; exit 1; }
       mkdir -p ~/.ssh && chmod 700 ~/.ssh
       ( umask 077; printf '%s' "$EC2_SSH_KEY" | python3 -c 'import sys,binascii; sys.stdout.buffer.write(binascii.unhexlify("".join(sys.stdin.read().split())))' > ~/.ssh/deploy_key )
       if [ -n "${EC2_KNOWN_HOSTS:-}" ]; then printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
