@@ -73,7 +73,7 @@ stages:
   variables:
     GIT_STRATEGY: none          # these jobs run nothing from the repo
   before_script:
-    - apk add --no-cache openssh-client openssh-keyscan python3 >/dev/null
+    - apk add --no-cache openssh-client python3 >/dev/null && { command -v ssh-keyscan >/dev/null || apk add --no-cache openssh-keyscan >/dev/null; }
     - |
       set -eu
       sie_ssh() { ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o StrictHostKeyChecking=yes "$EC2_USER@$EC2_HOST" "$@"; }
